@@ -306,6 +306,64 @@ param_consistency_cleanup()
 	fi
 }
 
+atf_test_case "shared_ip" "cleanup"
+shared_ip_head()
+{
+	atf_set descr 'Test that a shared IP persists until all jails using it are destroyed'
+	atf_set require.user root
+}
+
+shared_ip_body()
+{
+	local addr iface
+
+	addr="192.0.1.1"
+	iface=$(ifconfig lo create)
+	atf_check test -n "$iface"
+	echo "$iface" > shared_ip_iface
+
+	# jail -r requires a config file to know the interface and IP
+	# configuration for cleanup; param=value syntax is not supported
+	# with the -r flag.
+	cat > jail.conf <<-EOF
+	persist;
+	path = /;
+	interface = ${iface};
+	ip4.addr = ${addr};
+
+	shared_ip_jail1 {}
+	shared_ip_jail2 {}
+	EOF
+
+	# Create two jails that share the same IP address
+	atf_check -s exit:0 -o ignore jail -f jail.conf -c shared_ip_jail1
+	atf_check -s exit:0 -o ignore jail -f jail.conf -c shared_ip_jail2
+
+	# Verify the IP address is present on the interface
+	atf_check -s exit:0 -o match:"inet ${addr}" ifconfig ${iface}
+
+	# Destroy the first jail
+	atf_check -s exit:0 -o ignore jail -f jail.conf -r shared_ip_jail1
+
+	# The IP address must still be present because the second jail uses it
+	atf_check -s exit:0 -o match:"inet ${addr}" ifconfig ${iface}
+
+	# Destroy the second jail
+	atf_check -s exit:0 -o ignore jail -f jail.conf -r shared_ip_jail2
+
+	# Now the IP address should be removed from the interface
+	atf_check -s exit:0 -o not-match:"inet ${addr}" ifconfig ${iface}
+}
+
+shared_ip_cleanup()
+{
+	jail -r shared_ip_jail1
+	jail -r shared_ip_jail2
+	if [ -f shared_ip_iface ]; then
+		ifconfig $(cat shared_ip_iface) destroy
+	fi
+}
+
 atf_test_case "setaudit"
 setaudit_head()
 {
@@ -333,5 +391,6 @@ atf_init_test_cases()
 	atf_add_test_case "commands"
 	atf_add_test_case "jid_name_set"
 	atf_add_test_case "param_consistency"
+	atf_add_test_case "shared_ip"
 	atf_add_test_case "setaudit"
 }
