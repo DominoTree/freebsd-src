@@ -366,6 +366,10 @@ rss_getbucket(u_int hash)
  * NIC drivers can then iterate over the 128 slot RSS
  * indirection table and fetch which RSS bucket to
  * map it to.  This will typically be a CPU queue
+ *
+ * Note: a NIC's RX queue count is not guaranteed to be a power of
+ * two, so reduce the returned bucket to a queue with a modulo, not
+ * an AND mask, or some queues are starved.
  */
 u_int
 rss_get_indirection_to_bucket(u_int index)

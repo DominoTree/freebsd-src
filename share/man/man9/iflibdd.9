@@ -207,6 +207,9 @@ vaddrs and paddrs are arrays of virtual and physical addresses respectively of
 the hardware receive queues.
 nrxqs is the number of queues per qset.
 nrxqsets is the number of qsets.
+The qset count is not guaranteed to be a power of two, so reduce an
+RSS bucket to a queue with a modulo, not an AND mask, or some queues
+are starved.
 .It Fn ifdi_queues_free
 Mandatory function that frees the allocated queues and associated transmit
 buffers.
