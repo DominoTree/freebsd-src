@@ -988,6 +988,7 @@ qls_init_rss(qla_host_t *ha)
 	int		ret = 0;
 	int		i;
 	uint32_t	value;
+	uint32_t	rss_qs;
 
 	rss_icb = ha->rss_dma.dma_b;
 
@@ -1000,8 +1001,13 @@ qls_init_rss(qla_host_t *ha)
 
 	rss_icb->mask = 0x3FF;
 
+	/*
+	 * RSS: modulo over num_rx_rings.  Ring count isn't always a power of
+	 * two, so an AND mask would starve queues.
+	 */
+	rss_qs = ha->num_rx_rings;
 	for (i = 0; i < Q81_RSS_ICB_NUM_INDTBL_ENTRIES; i++) {
-		rss_icb->cq_id[i] = (i & (ha->num_rx_rings - 1));
+		rss_icb->cq_id[i] = (i % rss_qs);
 	}
 
 	memcpy(rss_icb->ipv6_rss_hash_key, q81_hash_key, 40);
