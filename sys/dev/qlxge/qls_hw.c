@@ -991,7 +991,7 @@ qls_init_rss(qla_host_t *ha)
 	rss_icb->mask = 0x3FF;
 
 	for (i = 0; i < Q81_RSS_ICB_NUM_INDTBL_ENTRIES; i++) {
-		rss_icb->cq_id[i] = (i & (ha->num_rx_rings - 1));
+		rss_icb->cq_id[i] = (i % ha->num_rx_rings);
 	}
 
 	_Static_assert(sizeof(rss_icb->ipv6_rss_hash_key) == RSS_KEYSIZE,
