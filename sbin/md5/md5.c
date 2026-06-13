@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <locale.h>
 #include <md5.h>
 #include <osreldate.h>
 #include <ripemd.h>
@@ -429,6 +430,8 @@ main(int argc, char *argv[])
 	char buf[HEX_DIGEST_LENGTH];
 	size_t len;
 	struct chksumrec *rec;
+
+	setlocale(LC_CTYPE, "");
 
 	if ((progname = strrchr(argv[0], '/')) == NULL)
 		progname = argv[0];

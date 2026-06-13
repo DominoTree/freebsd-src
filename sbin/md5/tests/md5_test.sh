@@ -390,6 +390,39 @@ EOF
 	atf_check sha1sum --quiet --check digests
 }
 
+atf_test_case filename_encoding
+filename_encoding_head()
+{
+	atf_set descr "Verify locale-aware encoding of filenames (PR 295875)"
+	atf_set require.progs "md5"
+}
+filename_encoding_body()
+{
+	locale -a 2>/dev/null | grep -Fqx 'C.UTF-8' ||
+	    atf_skip "C.UTF-8 locale not available"
+
+	# к о п и я .doc, the UTF-8 name from PR 295875.
+	name='копия.doc'
+	digest=b1946ac92492d2347c6235b4d2611184
+	printf 'hello\n' >"$name"
+
+	# In a UTF-8 locale a valid multibyte name passes through verbatim.
+	printf '%s %s\n' "$digest" "$name" >expected.utf8
+	atf_check -o file:expected.utf8 env LC_ALL=C.UTF-8 md5 -r "$name"
+
+	# In the C locale the high bytes are still octal-escaped.
+	printf '%s %s\n' "$digest" \
+	    '\320\272\320\276\320\277\320\270\321\217.doc' >expected.c
+	atf_check -o file:expected.c env LC_ALL=C md5 -r "$name"
+
+	# Control characters are escaped even in a UTF-8 locale.
+	ctrl="$(printf 'a\tb')"
+	: >"$ctrl"
+	printf '%s %s\n' d41d8cd98f00b204e9800998ecf8427e 'a\tb' \
+	    >expected.ctrl
+	atf_check -o file:expected.ctrl env LC_ALL=C.UTF-8 md5 -r "$ctrl"
+}
+
 atf_init_test_cases()
 {
 	for alg in $algorithms ; do
@@ -406,4 +439,5 @@ atf_init_test_cases()
 	atf_add_test_case gnu_bflag
 	atf_add_test_case gnu_cflag
 	atf_add_test_case gnu_cflag_mode
+	atf_add_test_case filename_encoding
 }
