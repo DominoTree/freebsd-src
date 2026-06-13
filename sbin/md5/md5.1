@@ -1,4 +1,4 @@
-.Dd April 6, 2026
+.Dd June 13, 2026
 .Dt MD5 1
 .Os
 .Sh NAME
@@ -91,6 +91,10 @@ described in
 using the
 .Dv VIS_CSTYLE \&| Dv VIS_OCTAL
 style.
+Whether a character is printable is determined by the
+.Ev LC_CTYPE
+locale category, so in a UTF-8 or other multibyte locale valid
+multibyte characters are passed through unencoded.
 .Pp
 It is conjectured that it is computationally infeasible to
 produce two messages having the same message digest, or to produce any
