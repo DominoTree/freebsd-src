@@ -34,6 +34,7 @@
 #include <sys/wait.h>
 
 #include <dtrace.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -823,7 +824,7 @@ compile_file(dtrace_cmd_t *dcp)
 static void
 compile_str(dtrace_cmd_t *dcp)
 {
-	char *p;
+	char *p, *name;
 
 	if ((dcp->dc_prog = dtrace_program_strcompile(g_dtp, dcp->dc_arg,
 	    dcp->dc_spec, g_cflags | DTRACE_C_PSPEC, g_argc, g_argv)) == NULL)
@@ -832,8 +833,17 @@ compile_str(dtrace_cmd_t *dcp)
 	if ((p = strpbrk(dcp->dc_arg, "{/;")) != NULL)
 		*p = '\0'; /* crop name for reporting */
 
+	/* Strip whitespace from around the reported name. */
+	name = dcp->dc_arg;
+	while (isspace((unsigned char)*name))
+		name++;
+	p = name + strlen(name);
+	while (p > name && isspace((unsigned char)p[-1]))
+		p--;
+	*p = '\0';
+
 	dcp->dc_desc = "description";
-	dcp->dc_name = dcp->dc_arg;
+	dcp->dc_name = name;
 }
 
 /*ARGSUSED*/
