@@ -387,9 +387,11 @@ err_exit:
 static int
 aq_hw_qos_set(struct aq_hw *hw)
 {
+	uint32_t tx_buf[HW_ATL_B0_TCS_MAX];
 	uint32_t tc = 0U;
 	uint32_t buff_size = 0U;
-	uint32_t n_tcs;
+	uint32_t n_tcs, nq, total, sum;
+	uint32_t deficit, slack_total, slack, cut;
 	unsigned int i_priority = 0U;
 	int err = 0;
 
@@ -405,10 +407,40 @@ aq_hw_qos_set(struct aq_hw *hw)
 	tps_tx_pkt_shed_desc_tc_arb_mode_set(hw, 0U);
 	tps_tx_pkt_shed_data_arb_mode_set(hw, 0U);
 
-	/* One TC per active 8-ring group; share the buffer across them. */
-	n_tcs = howmany(hw->tx_rings_count, HW_ATL_B0_RINGS_PER_TC);
-	n_tcs = MIN(MAX(n_tcs, 1U), HW_ATL_B0_TCS_MAX);
-	buff_size = AQ_HW_TXBUF_MAX / n_tcs;
+	/* One TC per active 8-ring group; buffer split by ring population. */
+	total = MAX(hw->tx_rings_count, 1U);
+	n_tcs = howmany(total, HW_ATL_B0_RINGS_PER_TC);
+	n_tcs = MIN(n_tcs, HW_ATL_B0_TCS_MAX);
+
+	sum = 0U;
+	for (tc = 0; tc < n_tcs; tc++) {
+		nq = MIN(HW_ATL_B0_RINGS_PER_TC,
+		    total - tc * HW_ATL_B0_RINGS_PER_TC);
+		tx_buf[tc] = MAX(AQ_HW_TXBUF_MAX * nq / total,
+		    HW_ATL_B0_TXBUF_MIN_PER_TC);
+		sum += tx_buf[tc];
+	}
+
+	/* Floors can overshoot the budget; reclaim from TCs above the floor. */
+	while (sum > AQ_HW_TXBUF_MAX) {
+		deficit = sum - AQ_HW_TXBUF_MAX;
+		slack_total = 0U;
+		for (tc = 0; tc < n_tcs; tc++)
+			slack_total += tx_buf[tc] - HW_ATL_B0_TXBUF_MIN_PER_TC;
+		if (slack_total == 0U)
+			break;
+		for (tc = 0; tc < n_tcs && sum > AQ_HW_TXBUF_MAX; tc++) {
+			slack = tx_buf[tc] - HW_ATL_B0_TXBUF_MIN_PER_TC;
+			if (slack == 0U)
+				continue;
+			cut = howmany(deficit * slack, slack_total);
+			cut = MIN(cut, MIN(slack, sum - AQ_HW_TXBUF_MAX));
+			tx_buf[tc] -= cut;
+			sum -= cut;
+		}
+	}
+	/* Integer-division remainder goes to the busiest TC. */
+	tx_buf[0] += AQ_HW_TXBUF_MAX - sum;
 
 	for (tc = 0; tc < n_tcs; tc++) {
 		tps_tx_pkt_shed_tc_data_max_credit_set(hw, 0xFFF, tc);
@@ -416,11 +448,11 @@ aq_hw_qos_set(struct aq_hw *hw)
 		tps_tx_pkt_shed_desc_tc_max_credit_set(hw, 0x50, tc);
 		tps_tx_pkt_shed_desc_tc_weight_set(hw, 0x1E, tc);
 
-		tpb_tx_pkt_buff_size_per_tc_set(hw, buff_size, tc);
+		tpb_tx_pkt_buff_size_per_tc_set(hw, tx_buf[tc], tc);
 		tpb_tx_buff_hi_threshold_per_tc_set(hw,
-		    AQ_BUF_THRESHOLD(buff_size, 66U), tc);
+		    AQ_BUF_THRESHOLD(tx_buf[tc], 66U), tc);
 		tpb_tx_buff_lo_threshold_per_tc_set(hw,
-		    AQ_BUF_THRESHOLD(buff_size, 50U), tc);
+		    AQ_BUF_THRESHOLD(tx_buf[tc], 50U), tc);
 	}
 
 	/* QoS Rx buf size per TC */

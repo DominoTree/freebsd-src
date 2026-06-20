@@ -218,6 +218,9 @@ struct aq_hw {
 #define AQ_HW_TXBUF_MAX  160U
 #define AQ_HW_RXBUF_MAX  320U
 
+/* per-TC TX buffer floor: one jumbo frame plus headroom (KB) */
+#define HW_ATL_B0_TXBUF_MIN_PER_TC (((HW_ATL_B0_MTU_JUMBO + 1023U) / 1024U) + 4U)
+
 /* pct% of a kb-KB packet buffer, in 32-byte threshold units */
 #define AQ_BUF_THRESHOLD(kb, pct) ((kb) * (1024U / 32U) * (pct) / 100U)
 
