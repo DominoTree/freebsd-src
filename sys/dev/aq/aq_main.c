@@ -371,10 +371,12 @@ aq_if_attach_pre(if_ctx_t ctx)
 	softc->admin_ticks = 0;
 
 	iflib_set_mac(ctx, hw->mac_addr);
-	scctx->isc_tx_csum_flags = CSUM_IP | CSUM_TCP | CSUM_UDP | CSUM_TSO;
+	scctx->isc_tx_csum_flags = CSUM_IP | CSUM_TCP | CSUM_UDP | CSUM_TSO |
+	    CSUM_IP6_TCP | CSUM_IP6_UDP | CSUM_IP6_TSO;
 	scctx->isc_capabilities = IFCAP_RXCSUM | IFCAP_TXCSUM | IFCAP_HWCSUM |
-	    IFCAP_TSO | IFCAP_LRO | IFCAP_JUMBO_MTU | IFCAP_VLAN_HWFILTER |
-	    IFCAP_VLAN_MTU | IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_HWCSUM;
+	    IFCAP_HWCSUM_IPV6 | IFCAP_TSO | IFCAP_LRO | IFCAP_JUMBO_MTU |
+	    IFCAP_VLAN_HWFILTER | IFCAP_VLAN_MTU | IFCAP_VLAN_HWTAGGING |
+	    IFCAP_VLAN_HWCSUM;
 	scctx->isc_capenable = scctx->isc_capabilities;
 	scctx->isc_tx_nsegments = 31;
 	scctx->isc_tx_tso_segments_max = 31;
