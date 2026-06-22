@@ -1890,13 +1890,29 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 	stats->illerrc += IXGBE_READ_REG(hw, IXGBE_ILLERRC);
 	stats->errbc += IXGBE_READ_REG(hw, IXGBE_ERRBC);
 	stats->mspdc += IXGBE_READ_REG(hw, IXGBE_MSPDC);
-	stats->mpc[0] += IXGBE_READ_REG(hw, IXGBE_MPC(0));
+	for (int i = 0; i < 8; i++) {
+		u32 mp = IXGBE_READ_REG(hw, IXGBE_MPC(i));
+		/* missed_rx tallies misses for the gprc workaround */
+		missed_rx += mp;
+		stats->mpc[i] += mp;
+		/* total for stats display */
+		total_missed_rx += stats->mpc[i];
+	}
+
+	/* mpc-only subtotal for the sysctl; qprdc is folded in below */
+	sc->missed_rx = total_missed_rx;
 
 	for (int i = 0; i < 16; i++) {
 		stats->qprc[i] += IXGBE_READ_REG(hw, IXGBE_QPRC(i));
 		stats->qptc[i] += IXGBE_READ_REG(hw, IXGBE_QPTC(i));
 		stats->qprdc[i] += IXGBE_READ_REG(hw, IXGBE_QPRDC(i));
 	}
+
+	/* Per-queue no-descriptor drops are input drops too (82599+) */
+	if (hw->mac.type != ixgbe_mac_82598EB)
+		for (int i = 0; i < 16; i++)
+			total_missed_rx += stats->qprdc[i];
+
 	stats->mlfc += IXGBE_READ_REG(hw, IXGBE_MLFC);
 	stats->mrfc += IXGBE_READ_REG(hw, IXGBE_MRFC);
 	stats->rlec += IXGBE_READ_REG(hw, IXGBE_RLEC);
@@ -2004,7 +2020,6 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 	 * Aggregate following types of errors as RX errors:
 	 * - CRC error count,
 	 * - illegal byte error count,
-	 * - missed packets count,
 	 * - length error count,
 	 * - undersized packets count,
 	 * - fragmented packets count,
@@ -2012,8 +2027,8 @@ ixgbe_update_stats_counters(struct ixgbe_softc *sc)
 	 * - jabber count.
 	 */
 	IXGBE_SET_IERRORS(sc, stats->crcerrs + stats->illerrc +
-	    stats->mpc[0] + stats->rlec + stats->ruc + stats->rfc +
-	    stats->roc + stats->rjc);
+	    stats->rlec + stats->ruc + stats->rfc + stats->roc +
+	    stats->rjc);
 } /* ixgbe_update_stats_counters */
 
 /************************************************************************
@@ -2125,7 +2140,7 @@ ixgbe_add_hw_stats(struct ixgbe_softc *sc)
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "rec_len_errs",
 	    CTLFLAG_RD, &stats->rlec, "Receive Length Errors");
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "rx_missed_packets",
-	    CTLFLAG_RD, &stats->mpc[0], "RX Missed Packet Count");
+	    CTLFLAG_RD, &sc->missed_rx, "RX Missed Packet Count");
 
 	/* Flow Control stats */
 	SYSCTL_ADD_UQUAD(ctx, stat_list, OID_AUTO, "xon_txd",

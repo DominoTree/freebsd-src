@@ -463,6 +463,7 @@ struct ixgbe_softc {
 	/* counter(9) stats */
 	u64			ipackets;
 	u64			ierrors;
+	u64			missed_rx;
 	u64			opackets;
 	u64			oerrors;
 	u64			ibytes;
