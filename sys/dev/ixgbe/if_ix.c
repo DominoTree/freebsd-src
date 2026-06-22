@@ -3048,7 +3048,7 @@ ixgbe_msix_link(void *arg)
 				device_printf(iflib_get_dev(sc->ctx),
 				    "Received ECC Err, initiating reset\n");
 				hw->mac.flags |=
-				    ~IXGBE_FLAGS_DOUBLE_RESET_REQUIRED;
+				    IXGBE_FLAGS_DOUBLE_RESET_REQUIRED;
 				ixgbe_reset_hw(hw);
 				IXGBE_WRITE_REG(hw, IXGBE_EICR,
 				    IXGBE_EICR_ECC);
