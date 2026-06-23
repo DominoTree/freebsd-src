@@ -556,6 +556,7 @@ struct e1000_softc {
 	unsigned long		link_irq;
 	unsigned long		rx_overruns;
 	unsigned long		watchdog_events;
+	unsigned long		rx_no_desc;
 
 	union {
 		struct e1000_hw_stats	stats;		/* !sc->vf_ifp */

@@ -4798,6 +4798,12 @@ em_update_stats_counters(struct e1000_softc *sc)
 		stats->tsctfc +=
 		E1000_READ_REG(&sc->hw, E1000_TSCTFC);
 	}
+
+	/* igb-class RQDPC: per-queue no-descriptor RX drops -> IQDROPS */
+	if (sc->hw.mac.type >= e1000_82575)
+		for (int i = 0; i < sc->rx_num_queues; i++)
+			sc->rx_no_desc +=
+			    E1000_READ_REG(&sc->hw, E1000_RQDPC(i));
 }
 
 static void
@@ -4862,6 +4868,8 @@ em_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 	case IFCOUNTER_OERRORS:
 		return (if_get_counter_default(ifp, cnt) +
 		    stats->ecol + stats->latecol + sc->watchdog_events);
+	case IFCOUNTER_IQDROPS:
+		return (sc->rx_no_desc);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
