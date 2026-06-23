@@ -451,10 +451,10 @@ aq_if_attach_post(if_ctx_t ctx)
 	aq_add_stats_sysctls(softc);
 	/* RSS */
 	arc4rand(softc->rss_key, HW_ATL_RSS_HASHKEY_SIZE, 0);
-	uint32_t rss_qs = MIN(softc->rx_rings_count, HW_ATL_RSS_INDIRECTION_QUEUES_MAX);
-	for (int i = nitems(softc->rss_table); i--;){
-		softc->rss_table[i] = i % rss_qs;
-	}
+	uint16_t rss_qs = MIN(iflib_get_nrxqsets(ctx),
+	    (int)HW_ATL_RSS_INDIRECTION_QUEUES_MAX);
+	for (int i = nitems(softc->rss_table); i--;)
+		softc->rss_table[i] = iflib_rss_bucket_n(i, rss_qs);
 exit:
 	AQ_DBG_EXIT(rc);
 	return (rc);
@@ -785,8 +785,6 @@ aq_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 	switch (cnt) {
 	case IFCOUNTER_IERRORS:
 		return (softc->curr_stats.erpr);
-	case IFCOUNTER_IQDROPS:
-		return (softc->curr_stats.dpc);
 	case IFCOUNTER_OERRORS:
 		return (softc->curr_stats.erpt);
 	default:

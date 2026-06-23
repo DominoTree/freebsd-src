@@ -96,6 +96,9 @@ aq_update_hw_stats(struct aq_dev *aq_dev)
 
 	memcpy(&aq_dev->last_stats, &mbox.stats, sizeof(mbox.stats));
 
+	/* Surface the cumulative firmware drop count as IQDROPS via iflib. */
+	iflib_rxq_set_iqdrops(aq_dev->ctx, 0, aq_dev->curr_stats.dpc);
+
 	return (0);
 }
 
