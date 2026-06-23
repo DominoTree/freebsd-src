@@ -1167,15 +1167,6 @@ bxe_storm_stats_update(struct bxe_softc *sc)
     return (0);
 }
 
-static void
-bxe_net_stats_update(struct bxe_softc *sc)
-{
-
-    for (int i = 0; i < sc->num_queues; i++)
-        if_inc_counter(sc->ifp, IFCOUNTER_IQDROPS,
-	    le32toh(sc->fp[i].old_tclient.checksum_discard));
-}
-
 uint64_t
 bxe_get_counter(if_t ifp, ift_counter cnt)
 {
@@ -1215,6 +1206,14 @@ bxe_get_counter(if_t ifp, ift_counter cnt)
 		return (bxe_hilo(&estats->tx_stat_etherstatscollisions_hi) +
 		    bxe_hilo(&estats->tx_stat_dot3statslatecollisions_hi) +
 		    bxe_hilo(&estats->tx_stat_dot3statsexcessivecollisions_hi));
+	case IFCOUNTER_IQDROPS: {
+		uint64_t iqdrops = 0;
+
+		for (int i = 0; i < sc->num_queues; i++)
+			iqdrops += bxe_hilo(&sc->fp[i].eth_q_stats.
+			    total_packets_received_checksum_discarded_hi);
+		return (iqdrops);
+	}
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
@@ -1332,7 +1331,6 @@ bxe_stats_update(struct bxe_softc *sc)
         bxe_storm_stats_update(sc);
     }
 
-    bxe_net_stats_update(sc);
     bxe_drv_stats_update(sc);
 
     /* vf is done */
@@ -1413,8 +1411,6 @@ bxe_stats_stop(struct bxe_softc *sc)
     update |= bxe_storm_stats_update(sc) == 0;
 
     if (update) {
-        bxe_net_stats_update(sc);
-
         if (sc->port.pmf) {
             bxe_port_stats_stop(sc);
         }
