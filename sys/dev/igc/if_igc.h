@@ -368,6 +368,7 @@ struct igc_softc {
 	unsigned long	link_irq;
 	unsigned long	rx_overruns;
 	unsigned long	watchdog_events;
+	unsigned long	rx_no_desc;
 
 	struct igc_hw_stats stats;
 	u16		vf_ifp;

@@ -2577,6 +2577,10 @@ igc_update_stats_counters(struct igc_softc *sc)
 	sc->stats.tncrs += IGC_READ_REG(&sc->hw, IGC_TNCRS);
 	sc->stats.htdpmc += IGC_READ_REG(&sc->hw, IGC_HTDPMC);
 	sc->stats.tsctc += IGC_READ_REG(&sc->hw, IGC_TSCTC);
+
+	/* RQDPC: per-queue no-descriptor RX drops -> IQDROPS */
+	for (int i = 0; i < sc->rx_num_queues; i++)
+		sc->rx_no_desc += IGC_READ_REG(&sc->hw, IGC_RQDPC(i));
 }
 
 static uint64_t
@@ -2596,6 +2600,8 @@ igc_if_get_counter(if_ctx_t ctx, ift_counter cnt)
 	case IFCOUNTER_OERRORS:
 		return (if_get_counter_default(ifp, cnt) +
 		    sc->stats.ecol + sc->stats.latecol + sc->watchdog_events);
+	case IFCOUNTER_IQDROPS:
+		return (sc->rx_no_desc);
 	default:
 		return (if_get_counter_default(ifp, cnt));
 	}
