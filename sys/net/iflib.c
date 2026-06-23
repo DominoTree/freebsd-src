@@ -29,6 +29,7 @@
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_acpi.h"
+#include "opt_rss.h"
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -87,6 +88,9 @@
 #include <dev/pci/pci_private.h>
 
 #include <net/iflib.h>
+#ifdef RSS
+#include <net/rss_config.h>
+#endif
 
 #include "ifdi_if.h"
 
@@ -4626,6 +4630,31 @@ iflib_rxq_set_iqdrops(if_ctx_t ctx, uint16_t qid, uint64_t drops)
 {
 	MPASS(qid < NRXQSETS(ctx));
 	ctx->ifc_rxqs[qid].ifr_iqdrops = drops;
+}
+
+int
+iflib_get_nrxqsets(if_ctx_t ctx)
+{
+	return (NRXQSETS(ctx));
+}
+
+/* Map an RSS redirection slot to an rx queue, modulo nqueues (never & ). */
+uint16_t
+iflib_rss_bucket_n(uint32_t reta_index, uint16_t nqueues)
+{
+	if (nqueues == 0)
+		return (0);
+#ifdef RSS
+	return (rss_get_indirection_to_bucket(reta_index) % nqueues);
+#else
+	return (reta_index % nqueues);
+#endif
+}
+
+uint16_t
+iflib_rss_bucket(if_ctx_t ctx, uint32_t reta_index)
+{
+	return (iflib_rss_bucket_n(reta_index, NRXQSETS(ctx)));
 }
 
 /*********************************************************************

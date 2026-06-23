@@ -439,6 +439,16 @@ uint32_t iflib_get_rx_mbuf_sz(if_ctx_t ctx);
 void iflib_rxq_set_iqdrops(if_ctx_t ctx, uint16_t qid, uint64_t drops);
 
 /*
+ * RSS redirection-table helpers.  iflib_rss_bucket() maps a redirection-table
+ * slot to one of the ctx's rx queues; iflib_rss_bucket_n() caps the spread to
+ * nqueues for hardware whose RSS table addresses fewer queues than configured.
+ * Both own the modulo so drivers never reinvent it or assume a power of two.
+ */
+int iflib_get_nrxqsets(if_ctx_t ctx);
+uint16_t iflib_rss_bucket(if_ctx_t ctx, uint32_t reta_index);
+uint16_t iflib_rss_bucket_n(uint32_t reta_index, uint16_t nqueues);
+
+/*
  * If the driver can plug cleanly in to newbus use these
  */
 int iflib_device_probe(device_t);
