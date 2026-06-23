@@ -433,6 +433,12 @@ uint8_t iflib_in_detach(if_ctx_t ctx);
 uint32_t iflib_get_rx_mbuf_sz(if_ctx_t ctx);
 
 /*
+ * Record a driver's cumulative per-queue hardware input-drop count; iflib
+ * sums these across all rx queues into IFCOUNTER_IQDROPS.
+ */
+void iflib_rxq_set_iqdrops(if_ctx_t ctx, uint16_t qid, uint64_t drops);
+
+/*
  * If the driver can plug cleanly in to newbus use these
  */
 int iflib_device_probe(device_t);

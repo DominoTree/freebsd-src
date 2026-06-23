@@ -477,6 +477,8 @@ struct iflib_rxq {
 	if_ctx_t	ifr_ctx;
 	iflib_fl_t	ifr_fl;
 	uint64_t	ifr_rx_irq;
+	/* Driver-fed cumulative HW input drops; iflib sums these into IQDROPS. */
+	uint64_t	ifr_iqdrops;
 	struct pfil_head	*pfil;
 	/*
 	 * If there is a separate completion queue (IFLIB_HAS_RXCQ), this is
@@ -4598,11 +4600,32 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 }
 
 static uint64_t
+iflib_rxq_iqdrops(if_ctx_t ctx)
+{
+	uint64_t drops = 0;
+
+	if (ctx->ifc_rxqs == NULL)
+		return (0);
+	for (int i = 0; i < NRXQSETS(ctx); i++)
+		drops += ctx->ifc_rxqs[i].ifr_iqdrops;
+	return (drops);
+}
+
+static uint64_t
 iflib_if_get_counter(if_t ifp, ift_counter cnt)
 {
 	if_ctx_t ctx = if_getsoftc(ifp);
 
+	if (cnt == IFCOUNTER_IQDROPS)
+		return (IFDI_GET_COUNTER(ctx, cnt) + iflib_rxq_iqdrops(ctx));
 	return (IFDI_GET_COUNTER(ctx, cnt));
+}
+
+void
+iflib_rxq_set_iqdrops(if_ctx_t ctx, uint16_t qid, uint64_t drops)
+{
+	MPASS(qid < NRXQSETS(ctx));
+	ctx->ifc_rxqs[qid].ifr_iqdrops = drops;
 }
 
 /*********************************************************************
