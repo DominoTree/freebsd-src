@@ -60,8 +60,11 @@ aq_update_hw_stats(struct aq_dev *aq_dev)
 
 	aq_hw_mpi_read_stats(hw, &mbox);
 
-#define AQ_SDELTA(_N_) (aq_dev->curr_stats._N_ += \
-    mbox.stats._N_ - aq_dev->last_stats._N_)
+#define AQ_SDELTA(_N_) do { \
+	int32_t _d = (int32_t)(mbox.stats._N_ - aq_dev->last_stats._N_); \
+	if (_d > 0) \
+		aq_dev->curr_stats._N_ += _d; \
+} while (0)
 	if (aq_dev->linkup) {
 		AQ_SDELTA(uprc);
 		AQ_SDELTA(mprc);
