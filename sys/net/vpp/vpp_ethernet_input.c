@@ -25,6 +25,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
@@ -60,11 +62,13 @@ vpp_eth_input_node(struct vpp_runtime *rt, struct vpp_frame *f)
 			md.l3_off = ETHER_HDR_LEN;
 			vpp_enq(rt, VPP_NODE_IP4_INPUT, m, &md);
 			break;
+#ifdef INET6
 		case ETHERTYPE_IPV6:
 			md.l3_off = ETHER_HDR_LEN;
 			md.is_v6 = 1;
 			vpp_enq(rt, VPP_NODE_IP6_INPUT, m, &md);
 			break;
+#endif
 		default:
 			md.error = VPP_ERR_NOT_IP4;
 			vpp_enq(rt, VPP_NODE_PUNT, m, &md);

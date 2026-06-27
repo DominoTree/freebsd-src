@@ -34,6 +34,8 @@
  * bumped on any lle or ifnet-departure event, lazily invalidates entries.
  */
 
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/eventhandler.h>
@@ -49,8 +51,10 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#ifdef INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
+#endif
 
 #include <net/vpp/vpp.h>
 
@@ -118,6 +122,7 @@ vpp_adj_get(struct vpp_runtime *rt, struct nhop_object *nh, uint32_t dest)
 	return (a);
 }
 
+#ifdef INET6
 struct vpp_adj *
 vpp_adj_get6(struct vpp_runtime *rt, struct nhop_object *nh,
     const struct in6_addr *dst)
@@ -150,6 +155,7 @@ vpp_adj_get6(struct vpp_runtime *rt, struct nhop_object *nh,
 	a->valid = 1;
 	return (a);
 }
+#endif /* INET6 */
 
 void
 vpp_adj_init(void)
