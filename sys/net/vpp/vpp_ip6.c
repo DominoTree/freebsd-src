@@ -149,7 +149,8 @@ vpp_ip6_lookup_node(struct vpp_runtime *rt, struct vpp_frame *f)
 			md.error = VPP_ERR_LOCAL;
 			goto punt;
 		}
-		if (m->m_pkthdr.len - md.l3_off > nh->nh_mtu) {
+		if ((uint32_t)ntohs(ip6->ip6_plen) + sizeof(struct ip6_hdr) >
+		    nh->nh_mtu) {
 			md.error = VPP_ERR_MTU;
 			goto punt;
 		}

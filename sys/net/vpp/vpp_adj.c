@@ -66,7 +66,8 @@ static void
 vpp_adj_bump(void)
 {
 
-	atomic_add_int(&vpp_adj_gen, 1);
+	/* Release so the lle/ifnet change is visible before the new gen. */
+	atomic_add_rel_int(&vpp_adj_gen, 1);
 }
 
 static void
@@ -96,7 +97,7 @@ vpp_adj_get(struct vpp_runtime *rt, struct nhop_object *nh, uint32_t dest)
 		return (NULL);
 
 	idx = nhop_get_idx(nh);
-	gen = vpp_adj_gen;
+	gen = atomic_load_acq_int(&vpp_adj_gen);
 	a = &rt->adj_cache[idx & VPP_ADJ_MASK];
 	if (a->valid && a->nh_idx == idx && a->gen == gen && a->af == AF_INET)
 		return (a);
@@ -136,7 +137,7 @@ vpp_adj_get6(struct vpp_runtime *rt, struct nhop_object *nh,
 		return (NULL);
 
 	idx = nhop_get_idx(nh);
-	gen = vpp_adj_gen;
+	gen = atomic_load_acq_int(&vpp_adj_gen);
 	a = &rt->adj_cache[idx & VPP_ADJ_MASK];
 	if (a->valid && a->nh_idx == idx && a->gen == gen && a->af == AF_INET6)
 		return (a);
