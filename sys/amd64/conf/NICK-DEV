@@ -1,0 +1,24 @@
+include GENERIC
+ident		NICK-DEV
+
+# Full -CURRENT debugger defaults, pinned so they survive a switch to a stable
+# branch, where GENERIC drops its own "include std.debug".
+include "std.debug"
+
+# Driver debug msgs live inline in GENERIC, not in std.debug; pin them too.
+options 	IEEE80211_DEBUG		# enable debug msgs
+options 	USB_DEBUG		# enable debug msgs
+options 	HID_DEBUG		# enable debug msgs
+
+# Kernel-owned RSS: canonical Toeplitz hash key + indirection table mapping
+# flows to CPUs for end-to-end CPU affinity (RX queue -> netisr -> matching
+# TX queue).  Drivers program the NIC's RSS table from the kernel's.
+options		RSS
+
+nodevice	aq	# Aquantia AQC10x 10GbE
+nodevice	em	# Intel PRO/1000 + igb-class (i350, 82576, ...)
+nodevice	igc	# Intel I225/I226 2.5GbE
+nodevice	bxe	# Broadcom NetXtreme II BCM578XX 10GbE
+
+nodevice	ix	# Intel 82599/X5xx 10GbE
+nodevice	ixv	# Intel 10GbE VF
