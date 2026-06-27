@@ -40,15 +40,89 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip6.h>
+#include <netinet6/ip6_var.h>
 
 #include <machine/in_cksum.h>
 
 #include <net/vpp/vpp.h>
 
+/* IPv4 slow path: strip L2, finish checksums, hand to egress if_output. */
+static void
+vpp_output_slow4(struct mbuf *m, struct nhop_object *nh, uint16_t l3_off,
+    uint32_t dest)
+{
+	struct ifnet *ifp = nh->nh_ifp;
+	struct route ro;
+	struct sockaddr_in *dst;
+	const struct sockaddr *gw;
+	struct ip *ip;
+
+	m_adj(m, l3_off);
+	ip = mtod(m, struct ip *);
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP &
+	    ~ifp->if_hwassist)) {
+		ip->ip_sum = 0;
+		ip->ip_sum = in_cksum(m, ip->ip_hl << 2);
+		m->m_pkthdr.csum_flags &= ~CSUM_IP;
+	}
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA &
+	    ~ifp->if_hwassist)) {
+		in_delayed_cksum(m);
+		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+	}
+	bzero(&ro, sizeof(ro));
+	dst = (struct sockaddr_in *)&ro.ro_dst;
+	dst->sin_family = AF_INET;
+	dst->sin_len = sizeof(*dst);
+	dst->sin_addr.s_addr = dest;
+	if (nh->nh_flags & NHF_GATEWAY) {
+		gw = &nh->gw_sa;
+		ro.ro_flags |= RT_HAS_GW;
+	} else
+		gw = (const struct sockaddr *)dst;
+	m_clrprotoflags(m);
+	if ((*ifp->if_output)(ifp, m, gw, &ro) != 0)
+		counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
+}
+
+/* IPv6 slow path: strip L2, finish checksums, hand to egress if_output. */
+static void
+vpp_output_slow6(struct mbuf *m, struct nhop_object *nh, uint16_t l3_off)
+{
+	struct ifnet *ifp = nh->nh_ifp;
+	struct sockaddr_in6 dst;
+	struct ip6_hdr *ip6;
+
+	m_adj(m, l3_off);
+	ip6 = mtod(m, struct ip6_hdr *);
+	if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA_IPV6 &
+	    ~ifp->if_hwassist)) {
+		int off = ip6_lasthdr(m, 0, IPPROTO_IPV6, NULL);
+
+		if (off < (int)sizeof(struct ip6_hdr) ||
+		    off > m->m_pkthdr.len) {
+			m_freem(m);
+			counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
+			return;
+		}
+		in6_delayed_cksum(m, m->m_pkthdr.len - off, off);
+		m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA_IPV6;
+	}
+	bzero(&dst, sizeof(dst));
+	dst.sin6_family = AF_INET6;
+	dst.sin6_len = sizeof(dst);
+	dst.sin6_addr = (nh->nh_flags & NHF_GATEWAY) ?
+	    nh->gw6_sa.sin6_addr : ip6->ip6_dst;
+	m_clrprotoflags(m);
+	if ((*ifp->if_output)(ifp, m, (struct sockaddr *)&dst, NULL) != 0)
+		counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
+}
+
 /*
- * Strip the ingress L2 header, finish any deferred checksums the egress NIC
- * cannot offload, and hand the L3 packet to the egress if_output (which does
- * the L2 rewrite and neighbour resolution).  Mirrors ip_tryforward()'s send.
+ * Output node.  Fast path: cached egress L2 header and no pending checksum
+ * (the common transit case) -> rewrite L2 in place and if_transmit() directly.
+ * Otherwise fall to the family slow path via if_output().
  */
 void
 vpp_output_node(struct vpp_runtime *rt, struct vpp_frame *f)
@@ -59,43 +133,39 @@ vpp_output_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		struct mbuf *m = f->bufs[i];
 		struct vpp_pktmeta md = f->meta[i];
 		struct nhop_object *nh = md.nh;
-		struct ifnet *ifp = nh->nh_ifp;
-		struct route ro;
-		struct sockaddr_in *dst;
-		const struct sockaddr *gw;
-		struct ip *ip;
-		int error;
+		struct vpp_adj *adj;
+		struct ether_header *eh;
+		bool fast;
 
-		m_adj(m, md.l3_off);
-		ip = mtod(m, struct ip *);
+		VPP_PREFETCH(f, i);
+		if (md.is_v6) {
+			struct ip6_hdr *ip6 =
+			    (struct ip6_hdr *)(mtod(m, char *) + md.l3_off);
 
-		if (__predict_false(m->m_pkthdr.csum_flags & CSUM_IP &
-		    ~ifp->if_hwassist)) {
-			ip->ip_sum = 0;
-			ip->ip_sum = in_cksum(m, ip->ip_hl << 2);
-			m->m_pkthdr.csum_flags &= ~CSUM_IP;
-		}
-		if (__predict_false(m->m_pkthdr.csum_flags & CSUM_DELAY_DATA &
-		    ~ifp->if_hwassist)) {
-			in_delayed_cksum(m);
-			m->m_pkthdr.csum_flags &= ~CSUM_DELAY_DATA;
+			adj = vpp_adj_get6(rt, nh, &ip6->ip6_dst);
+			fast = (adj != NULL && (m->m_pkthdr.csum_flags &
+			    CSUM_DELAY_DATA_IPV6) == 0);
+		} else {
+			adj = vpp_adj_get(rt, nh, md.dest);
+			fast = (adj != NULL && (m->m_pkthdr.csum_flags &
+			    (CSUM_IP | CSUM_DELAY_DATA)) == 0);
 		}
 
-		bzero(&ro, sizeof(ro));
-		dst = (struct sockaddr_in *)&ro.ro_dst;
-		dst->sin_family = AF_INET;
-		dst->sin_len = sizeof(*dst);
-		dst->sin_addr.s_addr = md.dest;
-		if (nh->nh_flags & NHF_GATEWAY) {
-			gw = &nh->gw_sa;
-			ro.ro_flags |= RT_HAS_GW;
-		} else
-			gw = (const struct sockaddr *)dst;
+		if (__predict_true(fast)) {
+			eh = mtod(m, struct ether_header *);
+			memcpy(eh, adj->eh, ETHER_HDR_LEN);
+			counter_u64_add(vpp_stat[VPP_STAT_FAST], 1);
+			m_clrprotoflags(m);
+			if (if_transmit(adj->txifp, m) != 0)
+				counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
+			continue;
+		}
 
-		m_clrprotoflags(m);
-		error = (*ifp->if_output)(ifp, m, gw, &ro);
-		if (error != 0)
-			counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
+		counter_u64_add(vpp_stat[VPP_STAT_SLOW], 1);
+		if (md.is_v6)
+			vpp_output_slow6(m, nh, md.l3_off);
+		else
+			vpp_output_slow4(m, nh, md.l3_off, md.dest);
 	}
 	f->n = 0;
 }

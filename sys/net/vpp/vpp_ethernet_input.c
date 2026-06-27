@@ -46,6 +46,7 @@ vpp_eth_input_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		struct vpp_pktmeta md = f->meta[i];
 		struct ether_header *eh;
 
+		VPP_PREFETCH(f, i);
 		if (m->m_len < ETHER_HDR_LEN) {
 			m = m_pullup(m, ETHER_HDR_LEN);
 			if (m == NULL) {
@@ -54,12 +55,20 @@ vpp_eth_input_node(struct vpp_runtime *rt, struct vpp_frame *f)
 			}
 		}
 		eh = mtod(m, struct ether_header *);
-		if (ntohs(eh->ether_type) == ETHERTYPE_IP) {
+		switch (ntohs(eh->ether_type)) {
+		case ETHERTYPE_IP:
 			md.l3_off = ETHER_HDR_LEN;
 			vpp_enq(rt, VPP_NODE_IP4_INPUT, m, &md);
-		} else {
+			break;
+		case ETHERTYPE_IPV6:
+			md.l3_off = ETHER_HDR_LEN;
+			md.is_v6 = 1;
+			vpp_enq(rt, VPP_NODE_IP6_INPUT, m, &md);
+			break;
+		default:
 			md.error = VPP_ERR_NOT_IP4;
 			vpp_enq(rt, VPP_NODE_PUNT, m, &md);
+			break;
 		}
 	}
 	f->n = 0;

@@ -59,6 +59,9 @@ vpp_node_fn_t *const vpp_node_fns[VPP_N_NODES] = {
 	[VPP_NODE_IP4_INPUT] = vpp_ip4_input_node,
 	[VPP_NODE_IP4_LOOKUP] = vpp_ip4_lookup_node,
 	[VPP_NODE_IP4_REWRITE] = vpp_ip4_rewrite_node,
+	[VPP_NODE_IP6_INPUT] = vpp_ip6_input_node,
+	[VPP_NODE_IP6_LOOKUP] = vpp_ip6_lookup_node,
+	[VPP_NODE_IP6_REWRITE] = vpp_ip6_rewrite_node,
 	[VPP_NODE_OUTPUT] = vpp_output_node,
 	[VPP_NODE_PUNT] = vpp_punt_node,
 	[VPP_NODE_DROP] = vpp_drop_node,
@@ -69,6 +72,9 @@ const char *const vpp_node_names[VPP_N_NODES] = {
 	[VPP_NODE_IP4_INPUT] = "ip4_input",
 	[VPP_NODE_IP4_LOOKUP] = "ip4_lookup",
 	[VPP_NODE_IP4_REWRITE] = "ip4_rewrite",
+	[VPP_NODE_IP6_INPUT] = "ip6_input",
+	[VPP_NODE_IP6_LOOKUP] = "ip6_lookup",
+	[VPP_NODE_IP6_REWRITE] = "ip6_rewrite",
 	[VPP_NODE_OUTPUT] = "output",
 	[VPP_NODE_PUNT] = "punt",
 	[VPP_NODE_DROP] = "drop",
@@ -90,6 +96,12 @@ const char *const vpp_err_names[VPP_N_ERRORS] = {
 
 counter_u64_t vpp_node_pkts[VPP_N_NODES];
 counter_u64_t vpp_err_cnt[VPP_N_ERRORS];
+counter_u64_t vpp_stat[VPP_N_STATS];
+
+const char *const vpp_stat_names[VPP_N_STATS] = {
+	[VPP_STAT_FAST] = "fast",
+	[VPP_STAT_SLOW] = "slow",
+};
 
 static struct sysctl_ctx_list vpp_clist;
 
@@ -181,7 +193,7 @@ vpp_sysctl_disable(SYSCTL_HANDLER_ARGS)
 static void
 vpp_sysctl_init(void)
 {
-	struct sysctl_oid *root, *nodes, *errs;
+	struct sysctl_oid *root, *nodes, *errs, *stats;
 	int i;
 
 	sysctl_ctx_init(&vpp_clist);
@@ -208,6 +220,13 @@ vpp_sysctl_init(void)
 		SYSCTL_ADD_COUNTER_U64(&vpp_clist, SYSCTL_CHILDREN(errs),
 		    OID_AUTO, vpp_err_names[i], CTLFLAG_RD, &vpp_err_cnt[i],
 		    "count");
+
+	stats = SYSCTL_ADD_NODE(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "stat", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "forwarding-path stats");
+	for (i = 0; i < VPP_N_STATS; i++)
+		SYSCTL_ADD_COUNTER_U64(&vpp_clist, SYSCTL_CHILDREN(stats),
+		    OID_AUTO, vpp_stat_names[i], CTLFLAG_RD, &vpp_stat[i],
+		    "count");
 }
 
 static int
@@ -226,8 +245,11 @@ vpp_init(void)
 		vpp_node_pkts[i] = counter_u64_alloc(M_WAITOK);
 	for (i = 0; i < VPP_N_ERRORS; i++)
 		vpp_err_cnt[i] = counter_u64_alloc(M_WAITOK);
+	for (i = 0; i < VPP_N_STATS; i++)
+		vpp_stat[i] = counter_u64_alloc(M_WAITOK);
 
 	vpp_if_init();
+	vpp_adj_init();
 	vpp_sysctl_init();
 	return (0);
 }
@@ -238,6 +260,7 @@ vpp_uninit(void)
 	int cpu, i;
 
 	vpp_if_uninit();	/* restores if_input and drains the net epoch */
+	vpp_adj_fini();
 	sysctl_ctx_free(&vpp_clist);
 
 	CPU_FOREACH(cpu) {
@@ -249,6 +272,8 @@ vpp_uninit(void)
 		counter_u64_free(vpp_node_pkts[i]);
 	for (i = 0; i < VPP_N_ERRORS; i++)
 		counter_u64_free(vpp_err_cnt[i]);
+	for (i = 0; i < VPP_N_STATS; i++)
+		counter_u64_free(vpp_stat[i]);
 }
 
 static int
