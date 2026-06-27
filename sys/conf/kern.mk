@@ -311,7 +311,7 @@ SAN_CFLAGS+=	${MSAN_CFLAGS}
 # Kernel Undefined Behavior SANitizer support
 #
 .if !empty(KUBSAN_ENABLED)
-SAN_CFLAGS+=	-fsanitize=undefined
+SAN_CFLAGS+=	-fsanitize=undefined -fno-sanitize=alignment
 .endif
 
 #
