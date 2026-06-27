@@ -30,6 +30,8 @@
  * dispatcher, counters and control sysctls.
  */
 
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -59,9 +61,11 @@ vpp_node_fn_t *const vpp_node_fns[VPP_N_NODES] = {
 	[VPP_NODE_IP4_INPUT] = vpp_ip4_input_node,
 	[VPP_NODE_IP4_LOOKUP] = vpp_ip4_lookup_node,
 	[VPP_NODE_IP4_REWRITE] = vpp_ip4_rewrite_node,
+#ifdef INET6
 	[VPP_NODE_IP6_INPUT] = vpp_ip6_input_node,
 	[VPP_NODE_IP6_LOOKUP] = vpp_ip6_lookup_node,
 	[VPP_NODE_IP6_REWRITE] = vpp_ip6_rewrite_node,
+#endif
 	[VPP_NODE_OUTPUT] = vpp_output_node,
 	[VPP_NODE_PUNT] = vpp_punt_node,
 	[VPP_NODE_DROP] = vpp_drop_node,
@@ -72,9 +76,11 @@ const char *const vpp_node_names[VPP_N_NODES] = {
 	[VPP_NODE_IP4_INPUT] = "ip4_input",
 	[VPP_NODE_IP4_LOOKUP] = "ip4_lookup",
 	[VPP_NODE_IP4_REWRITE] = "ip4_rewrite",
+#ifdef INET6
 	[VPP_NODE_IP6_INPUT] = "ip6_input",
 	[VPP_NODE_IP6_LOOKUP] = "ip6_lookup",
 	[VPP_NODE_IP6_REWRITE] = "ip6_rewrite",
+#endif
 	[VPP_NODE_OUTPUT] = "output",
 	[VPP_NODE_PUNT] = "punt",
 	[VPP_NODE_DROP] = "drop",
@@ -210,9 +216,10 @@ vpp_sysctl_init(void)
 	nodes = SYSCTL_ADD_NODE(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "node", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "per-node packet counts");
 	for (i = 0; i < VPP_N_NODES; i++)
-		SYSCTL_ADD_COUNTER_U64(&vpp_clist, SYSCTL_CHILDREN(nodes),
-		    OID_AUTO, vpp_node_names[i], CTLFLAG_RD, &vpp_node_pkts[i],
-		    "packets");
+		if (vpp_node_names[i] != NULL)
+			SYSCTL_ADD_COUNTER_U64(&vpp_clist,
+			    SYSCTL_CHILDREN(nodes), OID_AUTO, vpp_node_names[i],
+			    CTLFLAG_RD, &vpp_node_pkts[i], "packets");
 
 	errs = SYSCTL_ADD_NODE(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "error", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "per-error counts");

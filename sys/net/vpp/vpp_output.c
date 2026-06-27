@@ -25,6 +25,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_inet6.h"
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
@@ -86,6 +88,7 @@ vpp_output_slow4(struct mbuf *m, struct nhop_object *nh, uint16_t l3_off,
 		counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
 }
 
+#ifdef INET6
 /* IPv6 slow path: strip L2, finish checksums, hand to egress if_output. */
 static void
 vpp_output_slow6(struct mbuf *m, struct nhop_object *nh, uint16_t l3_off)
@@ -118,6 +121,7 @@ vpp_output_slow6(struct mbuf *m, struct nhop_object *nh, uint16_t l3_off)
 	if ((*ifp->if_output)(ifp, m, (struct sockaddr *)&dst, NULL) != 0)
 		counter_u64_add(vpp_err_cnt[VPP_ERR_TX], 1);
 }
+#endif /* INET6 */
 
 /*
  * Output node.  Fast path: cached egress L2 header and no pending checksum
@@ -138,6 +142,7 @@ vpp_output_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		bool fast;
 
 		VPP_PREFETCH(f, i);
+#ifdef INET6
 		if (md.is_v6) {
 			struct ip6_hdr *ip6 =
 			    (struct ip6_hdr *)(mtod(m, char *) + md.l3_off);
@@ -145,7 +150,9 @@ vpp_output_node(struct vpp_runtime *rt, struct vpp_frame *f)
 			adj = vpp_adj_get6(rt, nh, &ip6->ip6_dst);
 			fast = (adj != NULL && (m->m_pkthdr.csum_flags &
 			    CSUM_DELAY_DATA_IPV6) == 0);
-		} else {
+		} else
+#endif
+		{
 			adj = vpp_adj_get(rt, nh, md.dest);
 			fast = (adj != NULL && (m->m_pkthdr.csum_flags &
 			    (CSUM_IP | CSUM_DELAY_DATA)) == 0);
@@ -162,9 +169,11 @@ vpp_output_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		}
 
 		counter_u64_add(vpp_stat[VPP_STAT_SLOW], 1);
+#ifdef INET6
 		if (md.is_v6)
 			vpp_output_slow6(m, nh, md.l3_off);
 		else
+#endif
 			vpp_output_slow4(m, nh, md.l3_off, md.dest);
 	}
 	f->n = 0;
