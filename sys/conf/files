@@ -4284,6 +4284,14 @@ net/rtsock.c			standard
 net/slcompress.c		optional netgraph_vjc
 net/toeplitz.c			standard
 net/vnet.c			optional vimage
+net/vpp/vpp_main.c		optional vpp inet
+net/vpp/vpp_if.c		optional vpp inet
+net/vpp/vpp_ethernet_input.c	optional vpp inet
+net/vpp/vpp_ip4_input.c		optional vpp inet
+net/vpp/vpp_ip4_lookup.c	optional vpp inet
+net/vpp/vpp_ip4_rewrite.c	optional vpp inet
+net/vpp/vpp_output.c		optional vpp inet
+net/vpp/vpp_punt.c		optional vpp inet
 net80211/ieee80211.c		optional wlan
 net80211/ieee80211_acl.c	optional wlan wlan_acl
 net80211/ieee80211_action.c	optional wlan

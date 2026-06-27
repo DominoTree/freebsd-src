@@ -924,6 +924,15 @@ device		bpf
 #  driver. Supported drivers are ixgbe, e1000, re.
 device		netmap
 
+#  The `VPP' option enables an experimental, default-off VPP-style
+#  vectorized in-kernel IPv4 forwarding engine.  It taps the iflib(4) RX
+#  path (per interface, via if_input) so forwardable IPv4 transit traffic
+#  is processed in vectors through a node graph; all other traffic falls
+#  back to the normal network stack.  Requires INET.  Enable per interface
+#  with `sysctl net.vpp.enable=<ifname>'.  Also available as the vpp(4)
+#  loadable module.
+#options 	VPP
+
 #  The `disc' device implements a minimal network interface,
 #  which throws away all packets sent and never receives any.  It is
 #  included for testing and benchmarking purposes.

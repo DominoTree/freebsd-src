@@ -910,6 +910,9 @@ PICKMODE_DEBUG			opt_videomode.h
 VIMAGE			opt_global.h
 VNET_DEBUG		opt_global.h
 
+# Vector Packet Processing in-kernel forwarding engine
+VPP			opt_vpp.h
+
 # Common Flash Interface (CFI) options
 CFI_SUPPORT_STRATAFLASH	opt_cfi.h
 CFI_ARMEDANDDANGEROUS	opt_cfi.h
