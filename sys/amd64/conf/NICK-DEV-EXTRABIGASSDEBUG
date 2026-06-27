@@ -1,0 +1,10 @@
+include NICK-DEV
+ident		NICK-DEV-EXTRABIGASSDEBUG
+
+options 	KASAN
+# DEBUG_REDZONE does not build with KASAN.
+nooptions	DEBUG_REDZONE
+
+# KCSAN and KMSAN each conflict with KASAN and with each other.
+#options 	KCSAN
+#options 	KMSAN
