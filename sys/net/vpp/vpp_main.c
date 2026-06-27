@@ -196,6 +196,15 @@ vpp_sysctl_disable(SYSCTL_HANDLER_ARGS)
 	return (vpp_if_disable(name));
 }
 
+static int
+vpp_sysctl_interfaces(SYSCTL_HANDLER_ARGS)
+{
+	char buf[256];
+
+	(void)vpp_if_enabled_names(buf, sizeof(buf));
+	return (sysctl_handle_string(oidp, buf, sizeof(buf), req));
+}
+
 static void
 vpp_sysctl_init(void)
 {
@@ -212,6 +221,9 @@ vpp_sysctl_init(void)
 	SYSCTL_ADD_PROC(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO, "disable",
 	    CTLTYPE_STRING | CTLFLAG_WR | CTLFLAG_MPSAFE, NULL, 0,
 	    vpp_sysctl_disable, "A", "disable forwarding on the named interface");
+	SYSCTL_ADD_PROC(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "interfaces", CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+	    vpp_sysctl_interfaces, "A", "interfaces with forwarding enabled");
 
 	nodes = SYSCTL_ADD_NODE(&vpp_clist, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "node", CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, "per-node packet counts");

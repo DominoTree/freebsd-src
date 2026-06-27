@@ -158,6 +158,7 @@ struct mbuf *vpp_engine_input(if_t, struct mbuf *);
 
 int vpp_if_enable(const char *);
 int vpp_if_disable(const char *);
+size_t vpp_if_enabled_names(char *buf, size_t len);
 void vpp_if_init(void);
 void vpp_if_uninit(void);
 

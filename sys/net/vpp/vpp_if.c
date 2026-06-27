@@ -219,6 +219,27 @@ vpp_if_disable(const char *name)
 	return (0);
 }
 
+size_t
+vpp_if_enabled_names(char *buf, size_t len)
+{
+	struct vpp_ifsc *sc;
+	size_t off = 0;
+	int n;
+
+	if (len == 0)
+		return (0);
+	buf[0] = '\0';
+	sx_slock(&vpp_if_sx);
+	CK_LIST_FOREACH(sc, &vpp_iflist, link) {
+		n = snprintf(buf + off, len - off, "%s ", if_name(sc->ifp));
+		if (n < 0 || (size_t)n >= len - off)
+			break;
+		off += n;
+	}
+	sx_sunlock(&vpp_if_sx);
+	return (off);
+}
+
 static void
 vpp_if_departure(void *arg __unused, if_t ifp)
 {
