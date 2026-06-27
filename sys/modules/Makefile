@@ -433,6 +433,7 @@ SUBDIR=	\
 	${_vmware} \
 	vr \
 	vte \
+	${_vpp} \
 	${_wbwd} \
 	${_wdatwd} \
 	wlan \
@@ -514,6 +515,7 @@ _if_stf=	if_stf
 .if (${KERN_OPTS:MINET} && ${MK_INET_SUPPORT} != "no") || defined(ALL_MODULES)
 _if_me=		if_me
 _ipfw=		ipfw
+_vpp=		vpp
 .if ${MK_INET6_SUPPORT} != "no" || defined(ALL_MODULES)
 _ipfw_nat64=	ipfw_nat64
 .endif
