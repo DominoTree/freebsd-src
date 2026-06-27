@@ -46,6 +46,7 @@ vpp_ip4_rewrite_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		struct vpp_pktmeta md = f->meta[i];
 		struct ip *ip = (struct ip *)(mtod(m, char *) + md.l3_off);
 
+		VPP_PREFETCH(f, i);
 		ip->ip_ttl -= IPTTLDEC;
 		if (__predict_true((m->m_pkthdr.csum_flags & CSUM_IP) == 0)) {
 			if (ip->ip_sum >= (uint16_t)~htons(IPTTLDEC << 8))

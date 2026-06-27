@@ -55,6 +55,7 @@ vpp_ip4_lookup_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		struct nhop_object *nh;
 		struct in_addr dst;
 
+		VPP_PREFETCH(f, i);
 		dst.s_addr = md.dest;
 		nh = fib4_lookup(md.fib, dst, 0, NHR_NONE, m->m_pkthdr.flowid);
 		if (nh == NULL) {

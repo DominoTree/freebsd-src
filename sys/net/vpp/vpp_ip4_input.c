@@ -32,11 +32,13 @@
 
 #include <net/if.h>
 #include <net/if_var.h>
+#include <net/pfil.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_var.h>
 #include <netinet/ip.h>
+#include <netinet/ip_var.h>
 
 #include <machine/in_cksum.h>
 
@@ -48,6 +50,18 @@ vpp_ip4_input_node(struct vpp_runtime *rt, struct vpp_frame *f)
 {
 	uint32_t i;
 
+	/*
+	 * A configured firewall must see transit traffic; if pfil is hooked,
+	 * punt the whole frame to the normal stack rather than bypass it.
+	 */
+	if (__predict_false(PFIL_HOOKED_IN(V_inet_pfil_head) ||
+	    PFIL_HOOKED_OUT(V_inet_pfil_head))) {
+		for (i = 0; i < f->n; i++)
+			vpp_enq(rt, VPP_NODE_PUNT, f->bufs[i], &f->meta[i]);
+		f->n = 0;
+		return;
+	}
+
 	for (i = 0; i < f->n; i++) {
 		struct mbuf *m = f->bufs[i];
 		struct vpp_pktmeta md = f->meta[i];
@@ -55,6 +69,7 @@ vpp_ip4_input_node(struct vpp_runtime *rt, struct vpp_frame *f)
 		int hlen;
 		uint16_t ip_len;
 
+		VPP_PREFETCH(f, i);
 		if (m->m_len < md.l3_off + (int)sizeof(struct ip)) {
 			m = m_pullup(m, md.l3_off + sizeof(struct ip));
 			if (m == NULL) {
