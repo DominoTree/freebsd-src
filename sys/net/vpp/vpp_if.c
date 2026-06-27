@@ -54,6 +54,7 @@ struct vpp_ifsc {
 	CK_LIST_ENTRY(vpp_ifsc)	link;
 	if_t			ifp;
 	if_input_fn_t		saved_input;
+	bool			lro_was_on;
 	struct epoch_context	ectx;
 };
 
@@ -174,6 +175,14 @@ vpp_if_enable(const char *name)
 	CK_LIST_INSERT_HEAD(&vpp_iflist, sc, link);
 	if_setinputfn(ifp, vpp_if_input);
 	IFNET_RUNLOCK();
+	/*
+	 * LRO coalesces transit TCP before if_input, hiding it from the
+	 * engine; disable it while VPP owns the interface.
+	 */
+	if (if_getcapenable(ifp) & IFCAP_LRO) {
+		sc->lro_was_on = true;
+		if_setcapenablebit(ifp, 0, IFCAP_LRO);
+	}
 	sx_xunlock(&vpp_if_sx);
 	return (0);
 }
@@ -199,6 +208,8 @@ vpp_if_disable(const char *name)
 	if_setinputfn(ifp, sc->saved_input);
 	CK_LIST_REMOVE(sc, link);
 	IFNET_RUNLOCK();
+	if (sc->lro_was_on)
+		if_setcapenablebit(ifp, IFCAP_LRO, 0);
 	sx_xunlock(&vpp_if_sx);
 
 	NET_EPOCH_WAIT();		/* drain in-flight vpp_if_input */
@@ -248,6 +259,8 @@ vpp_if_uninit(void)
 		if_setinputfn(sc->ifp, sc->saved_input);
 		CK_LIST_REMOVE(sc, link);
 		IFNET_RUNLOCK();
+		if (sc->lro_was_on)
+			if_setcapenablebit(sc->ifp, IFCAP_LRO, 0);
 		if_rele(sc->ifp);
 		NET_EPOCH_CALL(vpp_ifsc_free, &sc->ectx);
 	}
