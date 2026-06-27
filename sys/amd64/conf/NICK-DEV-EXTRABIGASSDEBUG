@@ -1,0 +1,22 @@
+include NICK-DEV
+ident		NICK-DEV-EXTRABIGASSDEBUG
+
+# Too costly under KASAN for daily use.
+options 	COVERAGE
+options 	KCOV
+options 	DEBUG_MEMGUARD
+
+options 	KTR
+options 	KTR_MASK=(KTR_ALL)
+options 	KTR_VERBOSE=0		# Avoid msgbuf lock recursion.
+options 	ALQ
+options 	KTR_ALQ
+options 	DEBUG_LOCKS
+options 	LOCK_PROFILING
+options 	WITNESS
+nooptions	WITNESS_SKIPSPIN
+options 	SOCKBUF_DEBUG
+
+# KCSAN, KMSAN and DEBUG_REDZONE each conflict with KASAN.
+#options 	KCSAN
+#options 	KMSAN
