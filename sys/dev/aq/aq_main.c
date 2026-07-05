@@ -382,7 +382,7 @@ aq_if_attach_pre(if_ctx_t ctx)
 	if (hw->fast_start_enabled)
 		hw->fw_ops->reset(hw);
 	else
-		aq_hw_reset(&softc->hw);
+		aq_hw_reset(&softc->hw, !IS_CHIP_FEATURE(hw, ATLANTIC2));
 	aq_hw_capabilities(softc);
 
 	rc = aq_hw_get_mac_permanent(hw, hw->mac_addr);
@@ -801,7 +801,7 @@ aq_if_stop(if_ctx_t ctx)
 		aq_ring_rx_stop(hw, softc->rx_rings[i]);
 	}
 
-	aq_hw_reset(&softc->hw);
+	aq_hw_reset(&softc->hw, true);
 	memset(&softc->last_stats, 0, sizeof(softc->last_stats));
 	softc->linkup = false;
 	aq_if_update_admin_status(ctx);
