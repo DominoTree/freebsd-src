@@ -2,12 +2,12 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd December 1, 2025
+.Dd July 9, 2026
 .Dt AQ 4
 .Os
 .Sh NAME
 .Nm aq
-.Nd Aquantia / Marvell AQ1xx 10 Gigabit Ethernet driver
+.Nd Aquantia / Marvell AQC1xx Ethernet driver
 .Sh SYNOPSIS
 To compile this driver into the kernel, place the following lines in your
 kernel configuration file:
@@ -36,20 +36,30 @@ driver is experimental, and has a number of caveats and limitations.
 .Sh HARDWARE
 The
 .Nm
-driver supports the following 10 Gigabit Ethernet PCIe controllers:
-.Pp
-.Bl -bullet -compact
-.It
-aQuantia AQC107
-.It
-aQuantia AQC108
-.It
-aQuantia AQC109
-.It
-aQuantia AQC111
-.It
-aQuantia AQC112
+driver supports the following PCIe Ethernet controllers:
+.Bl -column "aQuantia AQC100" "Maximum speed"
+.It Em "Controller" Ta Em "Maximum speed"
+.It "aQuantia AQC100" Ta "10 Gigabit"
+.It "aQuantia AQC107" Ta "10 Gigabit"
+.It "aQuantia AQC108" Ta "5 Gigabit"
+.It "aQuantia AQC109" Ta "2.5 Gigabit"
+.It "aQuantia AQC111" Ta "5 Gigabit"
+.It "aQuantia AQC112" Ta "2.5 Gigabit"
+.It "Marvell AQC113" Ta "10 Gigabit"
+.It "Marvell AQC114" Ta "5 Gigabit"
+.It "Marvell AQC115" Ta "2.5 Gigabit"
+.It "Marvell AQC116" Ta "1 Gigabit"
 .El
+.Pp
+Suffixed variants of these controllers, such as
+.Dq AQC107S
+or
+.Dq AQC113CS ,
+are also supported and share the maximum speed of the base part.
+The AQC100 is an SFP+ controller; the remainder use twisted-pair media.
+.Pp
+Only the AQC113 through AQC116 support 10 Megabit operation;
+the remaining controllers negotiate no slower than 100 Megabit.
 .Sh SEE ALSO
 .Xr arp 4 ,
 .Xr miibus 4 ,
