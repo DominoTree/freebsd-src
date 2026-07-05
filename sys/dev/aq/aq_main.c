@@ -480,7 +480,7 @@ aq_if_detach(if_ctx_t ctx)
 
 	aq_hw_deinit(&softc->hw);
 
-	for (i = 0; i < softc->scctx->isc_nrxqsets; i++)
+	for (i = 0; i < softc->rx_rings_count; i++)
 		iflib_irq_free(ctx, &softc->rx_rings[i]->irq);
 	iflib_irq_free(ctx, &softc->irq);
 
@@ -1024,7 +1024,6 @@ aq_if_msix_intr_assign(if_ctx_t ctx, int msix)
 
 		if (rc) {
 			device_printf(softc->dev, "failed to set up RX handler\n");
-			i--;
 			goto fail;
 		}
 
@@ -1052,15 +1051,12 @@ aq_if_msix_intr_assign(if_ctx_t ctx, int msix)
 	if (rc) {
 		device_printf(iflib_get_dev(ctx),
 		    "Failed to register admin handler");
-		i = softc->rx_rings_count - 1;
 		goto fail;
 	}
 	AQ_DBG_EXIT(0);
 	return (0);
 
 fail:
-	for (; i >= 0; i--)
-		iflib_irq_free(ctx, &softc->rx_rings[i]->irq);
 	AQ_DBG_EXIT(rc);
 	return (rc);
 }
