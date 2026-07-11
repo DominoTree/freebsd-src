@@ -3292,32 +3292,9 @@ kern___realpathat(struct thread *td, int fd, const char *path, char *buf,
 	if ((error = namei(&nd)) != 0)
 		return (error);
 
-	if ((nd.ni_vp->v_type == VREG || nd.ni_vp->v_type == VSOCK) && nd.ni_dvp->v_type != VDIR &&
-	    (nd.ni_vp->v_vflag & VV_ROOT) != 0) {
-		struct vnode *covered_vp;
-
-		/*
-		 * This happens if vp is a file mount. The call to
-		 * vn_fullpath_hardlink can panic if path resolution can't be
-		 * handled without the directory.
-		 *
-		 * To resolve this, we find the vnode which was mounted on -
-		 * this should have a unique global path since we disallow
-		 * mounting on linked files.
-		 */
-		error = vn_lock(nd.ni_vp, LK_SHARED);
-		if (error != 0)
-			goto out;
-		covered_vp = nd.ni_vp->v_mount->mnt_vnodecovered;
-		vref(covered_vp);
-		VOP_UNLOCK(nd.ni_vp);
-		error = vn_fullpath(covered_vp, &retbuf, &freebuf);
-		vrele(covered_vp);
-	} else {
-		error = vn_fullpath_hardlink(nd.ni_vp, nd.ni_dvp,
-		    nd.ni_cnd.cn_nameptr, nd.ni_cnd.cn_namelen, &retbuf,
-		    &freebuf, &size);
-	}
+	error = vn_fullpath_hardlink(nd.ni_vp, nd.ni_dvp,
+	    nd.ni_cnd.cn_nameptr, nd.ni_cnd.cn_namelen, &retbuf,
+	    &freebuf, &size);
 	if (error == 0) {
 		size_t len;
 
@@ -3330,7 +3307,6 @@ kern___realpathat(struct thread *td, int fd, const char *path, char *buf,
 			memcpy(buf, retbuf, len);
 		free(freebuf, M_TEMP);
 	}
-out:
 	vrele(nd.ni_vp);
 	vrele(nd.ni_dvp);
 	NDFREE_PNBUF(&nd);
@@ -3839,15 +3815,6 @@ vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	int error;
 	__enum_uint8(vtype) type;
 
-	if (*buflen < 2)
-		return (EINVAL);
-	if (*buflen > MAXPATHLEN)
-		*buflen = MAXPATHLEN;
-
-	buf = malloc(*buflen, M_TEMP, M_WAITOK);
-
-	addend = 0;
-
 	/*
 	 * Check for VBAD to work around the vp_crossmp bug in lookup().
 	 *
@@ -3861,10 +3828,50 @@ vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	 * vp == vp_crossmp. Prevent the problem by checking for VBAD.
 	 */
 	type = atomic_load_8(&vp->v_type);
-	if (type == VBAD) {
-		error = ENOENT;
-		goto out_bad;
+	if (type == VBAD)
+		return (ENOENT);
+
+	/*
+	 * For file mounts dvp is vp_crossmp and unusable; resolve via the
+	 * covered vnode instead, whose path is unique since file mounts
+	 * require nlink == 1.
+	 */
+	if (type != VDIR && (vp->v_vflag & VV_ROOT) != 0) {
+		struct vnode *covered_vp;
+		size_t len;
+
+		error = vn_lock(vp, LK_SHARED);
+		if (error != 0)
+			return (error);
+		/* Recheck under the lock, the unlocked test is racy. */
+		if ((vp->v_vflag & VV_ROOT) == 0) {
+			VOP_UNLOCK(vp);
+			return (ENOENT);
+		}
+		covered_vp = vp->v_mount->mnt_vnodecovered;
+		vref(covered_vp);
+		VOP_UNLOCK(vp);
+		error = vn_fullpath(covered_vp, retbuf, freebuf);
+		vrele(covered_vp);
+		if (error != 0)
+			return (error);
+		len = strlen(*retbuf) + 1;
+		if (len > *buflen) {
+			free(*freebuf, M_TEMP);
+			return (ENAMETOOLONG);
+		}
+		*buflen = len;
+		return (0);
 	}
+
+	if (*buflen < 2)
+		return (EINVAL);
+	if (*buflen > MAXPATHLEN)
+		*buflen = MAXPATHLEN;
+
+	buf = malloc(*buflen, M_TEMP, M_WAITOK);
+
+	addend = 0;
 	if (type != VDIR) {
 		addend = hrdl_name_length + 2;
 		if (*buflen < addend) {
