@@ -178,6 +178,9 @@ struct aq_fw2x_mailbox // struct fwHostInterface
 // MSM Statistics
 #define FW2X_CAP_STATISTICS (1ull << (32 + CAPS_HI_STATISTICS))
 
+// PHY temperature sensor
+#define FW2X_CAP_TEMPERATURE (1ull << (32 + CAPS_HI_TEMPERATURE))
+
 
 #define FW2X_RATE_MASK  (FW2X_RATE_100M | FW2X_RATE_1G | FW2X_RATE_2G5 | FW2X_RATE_5G | FW2X_RATE_10G)
 #define FW2X_EEE_MASK  (FW2X_FW_CAP_EEE_100M | FW2X_FW_CAP_EEE_1G | FW2X_FW_CAP_EEE_2G5 | FW2X_FW_CAP_EEE_5G | FW2X_FW_CAP_EEE_10G)
@@ -202,6 +205,7 @@ static int aq_fw2x_get_mode(struct aq_hw* hw, enum aq_hw_fw_mpi_state* mode,
 
 static int aq_fw2x_get_mac_addr(struct aq_hw* hw, uint8_t* mac);
 static int aq_fw2x_get_stats(struct aq_hw* hw, struct aq_hw_stats* stats);
+static int aq_fw2x_get_temp(struct aq_hw* hw, int* temp_mc);
 
 
 static uint64_t
@@ -451,6 +455,36 @@ aq_fw2x_get_stats(struct aq_hw* hw, struct aq_hw_stats* stats)
 }
 
 static int
+aq_fw2x_get_temp(struct aq_hw* hw, int* temp_mc)
+{
+	uint64_t mpi_ctrl;
+	uint32_t reg = 0;
+	int err;
+
+	if ((hw->fw_caps & FW2X_CAP_TEMPERATURE) == 0)
+		return (ENOTSUP);
+
+	/* Request a refresh, then best-effort wait for the F/W to comply. */
+	mpi_ctrl = get_mpi_ctrl(hw);
+	mpi_ctrl ^= FW2X_CAP_TEMPERATURE;
+	set_mpi_ctrl(hw, mpi_ctrl);
+
+	(void)AQ_HW_WAIT_FOR((get_mpi_state(hw) & FW2X_CAP_TEMPERATURE) ==
+	    (mpi_ctrl & FW2X_CAP_TEMPERATURE), 1000, 100);
+
+	err = aq_hw_fw_downld_dwords(hw,
+	    hw->mbox_addr + offsetof(struct aq_fw2x_mailbox, phy_temperature),
+	    &reg, 1);
+	if (err != 0)
+		return (err);
+
+	/* phy_temperature is signed 1/256 degree Celsius. */
+	*temp_mc = (int)(int16_t)(reg & 0xffff) * 1000 / 256;
+
+	return (0);
+}
+
+static int
 aq_fw2x_led_control(struct aq_hw* hw, uint32_t onoff)
 {
 	int err = 0;
@@ -476,6 +510,7 @@ const struct aq_firmware_ops aq_fw2x_ops =
 
 	.get_mac_addr = aq_fw2x_get_mac_addr,
 	.get_stats = aq_fw2x_get_stats,
+	.get_temp = aq_fw2x_get_temp,
 
 	.led_control = aq_fw2x_led_control,
 };

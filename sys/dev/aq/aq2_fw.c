@@ -40,6 +40,7 @@ static int aq2_fw_get_mode(struct aq_hw *hw, enum aq_hw_fw_mpi_state *mode,
     enum aq_fw_link_speed *speed, enum aq_fw_link_fc *fc);
 static int aq2_fw_get_mac_addr(struct aq_hw *hw, uint8_t *mac);
 static int aq2_fw_get_stats(struct aq_hw *hw, struct aq_hw_stats *stats);
+static int aq2_fw_get_temp(struct aq_hw *hw, int *temp_mc);
 
 /* Coherent OUT-window read, bracketed by the transaction id. */
 static int
@@ -440,11 +441,32 @@ aq2_fw_get_stats(struct aq_hw *hw, struct aq_hw_stats *stats)
 	return (0);
 }
 
+/* A2 has one die sensor, shared by MAC and PHY; report whole degrees. */
+static int
+aq2_fw_get_temp(struct aq_hw *hw, int *temp_mc)
+{
+	uint32_t v;
+	int8_t temp_c;
+	int err;
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_PHY_HEALTH_REG, &v, sizeof(v));
+	if (err != 0)
+		return (err);
+
+	temp_c = (v & AQ2_FW_INTERFACE_OUT_PHY_HEALTH_TEMP) >>
+	    AQ2_FW_INTERFACE_OUT_PHY_HEALTH_TEMP_S;
+	*temp_mc = (int)temp_c * 1000;
+
+	return (0);
+}
+
 const struct aq_firmware_ops aq2_fw_ops = {
 	.reset = aq2_fw_reset,
 	.set_mode = aq2_fw_set_mode,
 	.get_mode = aq2_fw_get_mode,
 	.get_mac_addr = aq2_fw_get_mac_addr,
 	.get_stats = aq2_fw_get_stats,
+	.get_temp = aq2_fw_get_temp,
 	.led_control = NULL,
 };

@@ -1979,6 +1979,28 @@ reg_glb_nvr_interface1_get(struct aq_hw* hw)
 	return AQ_READ_REG(hw, glb_nvr_interface1_adr);
 }
 
+/* get global mdio interface */
+uint32_t
+reg_glb_mdio_iface_get(struct aq_hw *hw, uint32_t iface)
+{
+	return AQ_READ_REG(hw, glb_mdio_iface_adr(iface));
+}
+
+/* set global mdio interface */
+void
+reg_glb_mdio_iface_set(struct aq_hw *hw, uint32_t iface, uint32_t value)
+{
+	AQ_WRITE_REG(hw, glb_mdio_iface_adr(iface), value);
+}
+
+/* get mif mdio busy */
+uint32_t
+mdio_busy_get(struct aq_hw *hw)
+{
+	return AQ_READ_REG_BIT(hw, mdio_busy_adr, mdio_busy_msk,
+	    mdio_busy_shift);
+}
+
 /* get mif up mailbox busy */
 uint32_t
 mif_mcp_up_mailbox_busy_get(struct aq_hw *hw)

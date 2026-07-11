@@ -64,3 +64,11 @@ the remaining controllers negotiate no slower than 100 Megabit.
 .Xr arp 4 ,
 .Xr miibus 4 ,
 .Xr ifconfig 8
+.Sh CAVEATS
+Many AQC111 and AQC112 units shipped with the PHY IEEE 1588 block enabled,
+where it corrupts the receive datapath.
+The
+.Nm
+driver disables that block when the interface is brought up.
+The setting persists in the PHY until the adapter loses power, so it also
+affects other operating systems booted without an intervening power cycle.

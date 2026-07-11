@@ -71,6 +71,7 @@ __FBSDID("$FreeBSD$");
 #include "aq_hw.h"
 #include "aq2_hw.h"
 #include "aq_hw_llh.h"
+#include "aq_phy.h"
 #include "aq_ring.h"
 #include "aq_dbg.h"
 
@@ -729,6 +730,14 @@ aq_if_init(if_ctx_t ctx)
 		device_printf(softc->dev, "atlantic: aq_hw_init: %d\n", err);
 	}
 
+	if ((softc->quirks & AQ_QUIRK_BAD_PTP) != 0) {
+		if (aq_phy_init(hw))
+			aq_phy_disable_ptp(hw);
+		else
+			device_printf(softc->dev,
+			    "PHY not found, PTP block left enabled\n");
+	}
+
 	aq_if_media_status(ctx, &ifmr);
 
 	aq_update_vlan_filters(softc);
@@ -1195,20 +1204,31 @@ aq_hw_capabilities(struct aq_dev *softc)
 	case AQ_DEVICE_ID_D108:
 	case AQ_DEVICE_ID_AQC108:
 	case AQ_DEVICE_ID_AQC108S:
+		softc->media_type = AQ_MEDIA_TYPE_TP;
+		softc->link_speeds = AQ_LINK_ALL_ATLANTIC1 & ~AQ_LINK_10G;
+		break;
+
 	case AQ_DEVICE_ID_AQC111:
 	case AQ_DEVICE_ID_AQC111S:
 		softc->media_type = AQ_MEDIA_TYPE_TP;
 		softc->link_speeds = AQ_LINK_ALL_ATLANTIC1 & ~AQ_LINK_10G;
+		softc->quirks |= AQ_QUIRK_BAD_PTP;
 		break;
 
 	case AQ_DEVICE_ID_D109:
 	case AQ_DEVICE_ID_AQC109:
 	case AQ_DEVICE_ID_AQC109S:
+		softc->media_type = AQ_MEDIA_TYPE_TP;
+		softc->link_speeds = AQ_LINK_ALL_ATLANTIC1 &
+		    ~(AQ_LINK_10G | AQ_LINK_5G);
+		break;
+
 	case AQ_DEVICE_ID_AQC112:
 	case AQ_DEVICE_ID_AQC112S:
 		softc->media_type = AQ_MEDIA_TYPE_TP;
 		softc->link_speeds = AQ_LINK_ALL_ATLANTIC1 &
 		    ~(AQ_LINK_10G | AQ_LINK_5G);
+		softc->quirks |= AQ_QUIRK_BAD_PTP;
 		break;
 
 	case AQ_DEVICE_ID_AQC113:
@@ -1277,6 +1297,26 @@ aq_sysctl_print_rss_config(SYSCTL_HANDLER_ARGS)
 	sbuf_delete(buf);
 
 	return (0);
+}
+
+static int
+aq_sysctl_temperature(SYSCTL_HANDLER_ARGS)
+{
+	struct aq_dev  *softc = (struct aq_dev *)arg1;
+	struct aq_hw   *hw = &softc->hw;
+	int             temp_mc, val, err;
+
+	if (hw->fw_ops->get_temp == NULL)
+		return (ENOTSUP);
+
+	err = hw->fw_ops->get_temp(hw, &temp_mc);
+	if (err != 0)
+		return (err);
+
+	/* milli-degrees Celsius to deci-Kelvin for the "IK" format. */
+	val = temp_mc / 100 + 2731;
+
+	return (sysctl_handle_int(oidp, &val, 0, req));
 }
 
 static int
@@ -1372,6 +1412,12 @@ aq_add_stats_sysctls(struct aq_dev *softc)
 	SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "print_rss_config",
 	    CTLTYPE_STRING | CTLFLAG_RD, softc, 0,
 	    aq_sysctl_print_rss_config, "A", "Prints RSS Configuration");
+
+	/* PHY temperature, where the firmware exposes it. */
+	if (softc->hw.fw_ops->get_temp != NULL)
+		SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "temperature",
+		    CTLTYPE_INT | CTLFLAG_RD, softc, 0,
+		    aq_sysctl_temperature, "IK", "PHY temperature");
 
 	/* Runtime trace controls (global) */
 	SYSCTL_ADD_INT(ctx, child, OID_AUTO, "debug",

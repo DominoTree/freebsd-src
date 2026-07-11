@@ -57,6 +57,9 @@ enum aq_media_type {
 /* Atlantic 1 has no 10BASE-T PHY. */
 #define	AQ_LINK_ALL_ATLANTIC1	(AQ_LINK_ALL & ~AQ_LINK_10M)
 
+/* Shipped with a PTP block that corrupts the datapath; disable it. */
+#define	AQ_QUIRK_BAD_PTP	BIT(0)
+
 struct aq_stats {
 	uint64_t prc;
 	uint64_t uprc;
@@ -110,6 +113,7 @@ struct aq_dev {
 
 	enum aq_media_type	media_type;
 	uint32_t		link_speeds;
+	uint32_t		quirks;
 	uint32_t		chip_features;
 	uint32_t		mbox_addr;
 	uint8_t			mac_addr[ETHER_ADDR_LEN];

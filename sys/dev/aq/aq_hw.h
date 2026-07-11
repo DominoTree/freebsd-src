@@ -181,6 +181,9 @@ struct aq_hw {
 	uint16_t vendor_id;
 	uint8_t  revision_id;
 
+	/* MDIO address of the on-board PHY, latched by aq_phy_init(). */
+	uint32_t phy_id;
+
 	/* Interrupt Moderation value. */
 	int itr;
 
@@ -225,6 +228,7 @@ struct aq_hw {
 #define HW_ATL_B0_RINGS_PER_TC (HW_ATL_B0_RINGS_MAX / HW_ATL_B0_TCS_MAX)
 #define HW_ATL_B0_LRO_RXD_MAX 16U
 
+#define AQ_HW_FW_SM_MDIO       0x0U
 #define AQ_HW_FW_SM_RAM        0x2U
 
 #define AQ_HW_MPI_STATE_MSK    0x00FFU

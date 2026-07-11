@@ -231,6 +231,12 @@ aq_is_atlantic2(uint16_t device_id)
 
 #define AQ2_FW_INTERFACE_OUT_STATS_REG		0x13700
 
+/* phy_health_monitor: offsetof() in struct fw_interface_out from base 0x13000. */
+#define AQ2_FW_INTERFACE_OUT_PHY_HEALTH_REG	0x13620
+#define  AQ2_FW_INTERFACE_OUT_PHY_HEALTH_HOT_WARNING	(1 << 2)
+#define  AQ2_FW_INTERFACE_OUT_PHY_HEALTH_TEMP		0x0000ff00
+#define  AQ2_FW_INTERFACE_OUT_PHY_HEALTH_TEMP_S		8
+
 #define AQ2_FW_INTERFACE_OUT_LINK_STATUS_REG	0x13014
 #define  AQ2_FW_INTERFACE_OUT_LINK_STATUS_DUPLEX	(1 << 11)
 #define  AQ2_FW_INTERFACE_OUT_LINK_STATUS_EEE		(1 << 10)

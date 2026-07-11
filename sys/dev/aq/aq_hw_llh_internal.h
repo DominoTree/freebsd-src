@@ -3334,6 +3334,32 @@
 /* mif uP mailbox data [1f:0] */
 #define mif_mcp_up_mailbox_data_adr 0x0000020cu
 
+/* global mdio interface definitions
+ * base address: 0x00000280
+ * parameter: interface {i} | stride size 0x4 | range [1, 5]
+ */
+#define glb_mdio_iface_adr(iface) (0x00000280u + ((iface) - 1) * 0x4)
+
+/* mif mdio busy */
+#define mdio_busy_adr 0x00000284u
+#define mdio_busy_msk 0x80000000u
+#define mdio_busy_shift 31
+
+/* mif mdio execute operation */
+#define mdio_execute_operation_msk 0x00008000u
+
+/* mif mdio op mode [d:c] */
+#define mdio_op_mode_shift 12
+
+/* mif mdio phy address [9:0] */
+#define mdio_phy_address_msk 0x000003ffu
+
+/* mif mdio write data [f:0] */
+#define mdio_write_data_msk 0x0000ffffu
+
+/* mif mdio address [f:0] */
+#define mdio_address_msk 0x0000ffffu
+
 #define HW_ATL_RX_CTRL_ADDR_BEGIN_FL3L4   0x00005380
 #define HW_ATL_RX_SRCA_ADDR_BEGIN_FL3L4   0x000053B0
 #define HW_ATL_RX_DESTA_ADDR_BEGIN_FL3L4  0x000053D0

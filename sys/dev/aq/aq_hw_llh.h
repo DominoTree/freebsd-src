@@ -1031,6 +1031,14 @@ void reg_mif_power_gating_enable_control_set(struct aq_hw* hw, uint32_t value);
  */
 uint32_t reg_mif_power_gating_enable_control_get(struct aq_hw* hw);
 
+/* get global mdio interface */
+uint32_t reg_glb_mdio_iface_get(struct aq_hw *hw, uint32_t iface);
+/* set global mdio interface */
+void reg_glb_mdio_iface_set(struct aq_hw *hw, uint32_t iface, uint32_t value);
+
+/* get mif mdio busy */
+uint32_t mdio_busy_get(struct aq_hw *hw);
+
 /* get mif up mailbox busy */
 uint32_t mif_mcp_up_mailbox_busy_get(struct aq_hw *aq_hw);
 
