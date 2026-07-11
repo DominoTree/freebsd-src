@@ -21,6 +21,7 @@ TEST_METADATA.kern_descrip_test+= is_exclusive="true"
 PLAIN_TESTS_C+=	execve_overflow
 ATF_TESTS_C+=	exterr_test
 ATF_TESTS_C+=	fdgrowtable_test
+ATF_TESTS_C+=	filemount_path
 ATF_TESTS_C+=	getdirentries_test
 ATF_TESTS_C+=	jail_lookup_root
 ATF_TESTS_C+=	jail_thread
@@ -91,11 +92,13 @@ ${PACKAGE}FILESMODE_sonewconn_overflow.py=0555
 
 BINDIR=		${TESTSDIR}
 PROGS+=		coredump_phnum_helper
+PROGS+=		filemount_helper
 PROGS+=		pdeathsig_helper
 
 CFLAGS.aslr+=				-I${SRCTOP}/tests
 LIBADD.aslr+=				util
 LIBADD.copy_file_range+=		md
+LIBADD.filemount_path+=			util
 LIBADD.jail_lookup_root+=		jail util
 LIBADD.jail_thread+=			jail pthread
 LIBADD.jaildesc+=			kvm pthread
