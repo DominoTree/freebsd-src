@@ -5267,7 +5267,7 @@ static int
 em_enable_phy_wakeup(struct e1000_softc *sc)
 {
 	struct e1000_hw *hw = &sc->hw;
-	u32 mreg, ret = 0;
+	u32 mreg, ret = 0, wuc;
 	u16 preg;
 
 	/* copy MAC RARs to PHY RARs */
@@ -5302,13 +5302,16 @@ em_enable_phy_wakeup(struct e1000_softc *sc)
 	e1000_write_phy_reg(hw, BM_RCTL, preg);
 
 	/* enable PHY wakeup in MAC register */
-	E1000_WRITE_REG(hw, E1000_WUC,
-	    E1000_WUC_PHY_WAKE | E1000_WUC_PME_EN | E1000_WUC_APME);
+	wuc = E1000_WUC_PME_EN;
+	if (sc->wol & (E1000_WUFC_MAG | E1000_WUFC_LNKC))
+		wuc |= E1000_WUC_APME;
+	E1000_WRITE_REG(hw, E1000_WUC, E1000_WUC_PHY_WAKE |
+	    E1000_WUC_APMPME | E1000_WUC_PME_STATUS | wuc);
 	E1000_WRITE_REG(hw, E1000_WUFC, sc->wol);
 
 	/* configure and enable PHY wakeup in PHY registers */
 	e1000_write_phy_reg(hw, BM_WUFC, sc->wol);
-	e1000_write_phy_reg(hw, BM_WUC, E1000_WUC_PME_EN);
+	e1000_write_phy_reg(hw, BM_WUC, wuc);
 
 	/* activate PHY wakeup */
 	ret = hw->phy.ops.acquire(hw);
