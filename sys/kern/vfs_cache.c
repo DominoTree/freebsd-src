@@ -3774,6 +3774,22 @@ vn_fullpath_any(struct vnode *vp, struct vnode *rdir, char *buf, char **retbuf,
 	vref(vp);
 	addend = 0;
 	if (vp->v_type != VDIR) {
+		if ((vp->v_vflag & VV_ROOT) != 0) {
+			struct vnode *covered_vp;
+
+			/* File mount root: resolve via the covered vnode. */
+			vn_lock(vp, LK_RETRY | LK_SHARED);
+			if (VN_IS_DOOMED(vp) ||
+			    (vp->v_vflag & VV_ROOT) == 0 ||
+			    (covered_vp = vp->v_mount->mnt_vnodecovered) == NULL ||
+			    covered_vp->v_mountedhere != vp->v_mount) {
+				vput(vp);
+				return (ENOENT);
+			}
+			vref(covered_vp);
+			vput(vp);
+			vp = covered_vp;
+		}
 		*buflen -= 1;
 		buf[*buflen] = '\0';
 		error = vn_vptocnp(&vp, buf, buflen);
@@ -3831,28 +3847,11 @@ vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	if (type == VBAD)
 		return (ENOENT);
 
-	/*
-	 * For file mounts dvp is vp_crossmp and unusable; resolve via the
-	 * covered vnode instead, whose path is unique since file mounts
-	 * require nlink == 1.
-	 */
+	/* For file mounts dvp is vp_crossmp; vn_fullpath() resolves them. */
 	if (type != VDIR && (vp->v_vflag & VV_ROOT) != 0) {
-		struct vnode *covered_vp;
 		size_t len;
 
-		error = vn_lock(vp, LK_SHARED);
-		if (error != 0)
-			return (error);
-		/* Recheck under the lock, the unlocked test is racy. */
-		if ((vp->v_vflag & VV_ROOT) == 0) {
-			VOP_UNLOCK(vp);
-			return (ENOENT);
-		}
-		covered_vp = vp->v_mount->mnt_vnodecovered;
-		vref(covered_vp);
-		VOP_UNLOCK(vp);
-		error = vn_fullpath(covered_vp, retbuf, freebuf);
-		vrele(covered_vp);
+		error = vn_fullpath(vp, retbuf, freebuf);
 		if (error != 0)
 			return (error);
 		len = strlen(*retbuf) + 1;
