@@ -1487,15 +1487,46 @@ nextname:
 		error = EROFS;
 		goto bad2;
 	}
-	if (!wantparent) {
+	if (wantparent) {
+		/*
+		 * Don not return vp_crossmp for the case of mount
+		 * over the regular file.  Substitute ni_dvp with the
+		 * covered vnode.
+		 */
+		if (ndp->ni_dvp == vp_crossmp &&
+		    (dp->v_vflag & VV_ROOT) != 0 && dp->v_type != VDIR) {
+			struct vnode *mvp;
+
+			vput(ndp->ni_dvp);
+			mvp = dp->v_mount->mnt_vnodecovered;
+			vhold(mvp);
+			ndp->ni_dvp = mvp;
+			if ((cnp->cn_flags & LOCKPARENT) != 0) {
+				int locked;
+
+				locked = VOP_ISLOCKED(dp);
+				vn_lock_pair(dp, true, locked, mvp,
+				    false, LK_EXCLUSIVE);
+				vref(mvp);
+				vdrop(mvp);
+				if (VN_IS_DOOMED(dp) || VN_IS_DOOMED(mvp)) {
+					error = ENOENT;
+					goto bad2;
+				}
+			} else {
+				ni_dvp_unlocked = 1;
+			}
+		} else if ((cnp->cn_flags & LOCKPARENT) == 0 &&
+		    ndp->ni_dvp != dp) {
+			VOP_UNLOCK(ndp->ni_dvp);
+			ni_dvp_unlocked = 1;
+		}
+	} else {
 		ni_dvp_unlocked = 2;
 		if (ndp->ni_dvp != dp)
 			vput(ndp->ni_dvp);
 		else
 			vrele(ndp->ni_dvp);
-	} else if ((cnp->cn_flags & LOCKPARENT) == 0 && ndp->ni_dvp != dp) {
-		VOP_UNLOCK(ndp->ni_dvp);
-		ni_dvp_unlocked = 1;
 	}
 
 	if (cnp->cn_flags & AUDITVNODE1)
