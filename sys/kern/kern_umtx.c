@@ -53,6 +53,7 @@
 #include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
+#include <sys/sysent.h>
 #include <sys/systm.h>
 #include <sys/sysproto.h>
 #include <sys/syscallsubr.h>
@@ -113,7 +114,8 @@
 			  (td)->td_user_pri <= PRI_MAX_TIMESHARE) ?\
 			 PRI_MAX_TIMESHARE : (td)->td_user_pri)
 
-#define	GOLDEN_RATIO_PRIME	2654404609U
+#define	UMTXQ_MULT_SPARSE	2654404609U
+#define	UMTXQ_MULT_FAIR		1640531527U	/* Linux fair multiplier */
 #ifndef	UMTX_CHAINS
 #define	UMTX_CHAINS		512
 #endif
@@ -377,10 +379,14 @@ umtxq_free(struct umtx_q *uq)
 static inline void
 umtxq_hash(struct umtx_key *key)
 {
-	unsigned n;
+	unsigned mult, n;
 
 	n = (uintptr_t)key->info.both.a + key->info.both.b;
-	key->hash = ((n * GOLDEN_RATIO_PRIME) >> UMTX_SHIFTS) % UMTX_CHAINS;
+	mult = UMTXQ_MULT_SPARSE;
+	/* TYPE_FUTEX/TYPE_PI_FUTEX keys come only from Linux processes. */
+	if (SV_CURPROC_ABI() == SV_ABI_LINUX)
+		mult = UMTXQ_MULT_FAIR;
+	key->hash = ((n * mult) >> UMTX_SHIFTS) % UMTX_CHAINS;
 }
 
 struct umtxq_chain *
