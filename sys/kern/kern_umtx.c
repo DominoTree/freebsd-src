@@ -113,7 +113,7 @@
 			  (td)->td_user_pri <= PRI_MAX_TIMESHARE) ?\
 			 PRI_MAX_TIMESHARE : (td)->td_user_pri)
 
-#define	GOLDEN_RATIO_PRIME	2654404609U
+#define	GOLDEN_RATIO_PRIME	1640531527U
 #ifndef	UMTX_CHAINS
 #define	UMTX_CHAINS		512
 #endif
