@@ -90,9 +90,9 @@ VNET_DEFINE_STATIC(struct gif_list, ipv4_list) = CK_LIST_HEAD_INITIALIZER();
 #define	V_ipv4_list		VNET(ipv4_list)
 
 #define	GIF_HASH(src, dst)	(V_ipv4_hashtbl[\
-    in_gif_hashval((src), (dst)) & (V_ipv4_hashmask - 1)])
+    in_gif_hashval((src), (dst)) & V_ipv4_hashmask])
 #define	GIF_SRCHASH(src)	(V_ipv4_srchashtbl[\
-    fnv_32_buf(&(src), sizeof(src), FNV1_32_INIT) & (V_ipv4_hashmask - 1)])
+    fnv_32_buf(&(src), sizeof(src), FNV1_32_INIT) & V_ipv4_hashmask])
 #define	GIF_HASH_SC(sc)		GIF_HASH((sc)->gif_iphdr->ip_src.s_addr,\
     (sc)->gif_iphdr->ip_dst.s_addr)
 static uint32_t
