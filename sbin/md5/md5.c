@@ -399,7 +399,7 @@ gnu_check(const char *checksumsfile)
 static int
 safename(char *namebuf, size_t bufsize, const char *name)
 {
-	int vis_mode = VIS_NL | VIS_TAB | VIS_GLOB | VIS_SHELL;
+	int vis_mode = VIS_NL | VIS_TAB;
 	int vis_style = VIS_CSTYLE | VIS_OCTAL;
 
 	return (strnvis(namebuf, bufsize, name, vis_mode | vis_style));
