@@ -159,13 +159,17 @@ static void	 graph_remove_edge(struct owner_graph *g,
     struct owner_vertex *x, struct owner_vertex *y);
 static struct owner_vertex *graph_alloc_vertex(struct owner_graph *g,
     struct lock_owner *lo);
+static struct owner_vertex *graph_find_vertex(struct owner_graph *g,
+    struct lock_owner *lo);
 static void	 graph_free_vertex(struct owner_graph *g,
     struct owner_vertex *v);
 static struct owner_graph * graph_init(struct owner_graph *g);
 #ifdef LOCKF_DEBUG
 static void	 lf_print(char *, struct lockf_entry *);
 static void	 lf_printlist(char *, struct lockf_entry *);
+static void	 lf_print_owner_id(int, caddr_t, pid_t, int);
 static void	 lf_print_owner(struct lock_owner *);
+static void	 lf_print_vertex_owner(struct owner_vertex *);
 #endif
 
 /*
@@ -256,7 +260,11 @@ struct owner_vertex {
 	int		v_order;	  /* (g) order of vertex in graph */
 	struct owner_edge_list v_outedges;/* (g) list of out-edges */
 	struct owner_edge_list v_inedges; /* (g) list of in-edges */
-	struct lock_owner *v_owner;	  /* (c) corresponding lock owner */
+	int		v_refs;		  /* (g) lock owners sharing this vertex */
+	int		v_flags;	  /* (c) identity: lo_flags */
+	caddr_t		v_id;		  /* (c) identity: lo_id */
+	pid_t		v_pid;		  /* (c) identity: lo_pid */
+	int		v_sysid;	  /* (c) identity: lo_sysid */
 };
 TAILQ_HEAD(owner_vertex_list, owner_vertex);
 
@@ -380,8 +388,9 @@ lf_free_lock(struct lockf_entry *lock)
 #endif
 			if (lo->lo_vertex) {
 				sx_xlock(&lf_owner_graph_lock);
-				graph_free_vertex(&lf_owner_graph,
-				    lo->lo_vertex);
+				if (--lo->lo_vertex->v_refs == 0)
+					graph_free_vertex(&lf_owner_graph,
+					    lo->lo_vertex);
 				sx_xunlock(&lf_owner_graph_lock);
 			}
 			LIST_REMOVE(lo, lo_link);
@@ -879,10 +888,18 @@ static void
 lf_alloc_vertex(struct lockf_entry *lock)
 {
 	struct owner_graph *g = &lf_owner_graph;
+	struct lock_owner *lo = lock->lf_owner;
+	struct owner_vertex *v;
 
-	if (!lock->lf_owner->lo_vertex)
-		lock->lf_owner->lo_vertex =
-			graph_alloc_vertex(g, lock->lf_owner);
+	if (lo->lo_vertex)
+		return;
+	v = graph_find_vertex(g, lo);
+	if (v != NULL) {
+		v->v_refs++;
+		lo->lo_vertex = v;
+	} else {
+		lo->lo_vertex = graph_alloc_vertex(g, lo);
+	}
 }
 
 /*
@@ -2059,13 +2076,13 @@ graph_check(struct owner_graph *g, int checkorder)
 	int i, j;
 
 	for (i = 0; i < g->g_size; i++) {
-		if (!g->g_vertices[i]->v_owner)
+		if (g->g_vertices[i]->v_refs == 0)
 			continue;
 		KASSERT(g->g_vertices[i]->v_order == i,
 		    ("lock graph vertices disordered"));
 		if (checkorder) {
 			for (j = 0; j < i; j++) {
-				if (!g->g_vertices[j]->v_owner)
+				if (g->g_vertices[j]->v_refs == 0)
 					continue;
 				KASSERT(!graph_reaches(g->g_vertices[i],
 					g->g_vertices[j], NULL),
@@ -2083,7 +2100,7 @@ graph_print_vertices(struct owner_vertex_list *set)
 	printf("{ ");
 	TAILQ_FOREACH(v, set, v_link) {
 		printf("%d:", v->v_order);
-		lf_print_owner(v->v_owner);
+		lf_print_vertex_owner(v);
 		if (TAILQ_NEXT(v, v_link))
 			printf(", ");
 	}
@@ -2237,9 +2254,9 @@ graph_add_edge(struct owner_graph *g, struct owner_vertex *x,
 #ifdef LOCKF_DEBUG
 	if (lockf_debug & 8) {
 		printf("adding edge %d:", x->v_order);
-		lf_print_owner(x->v_owner);
+		lf_print_vertex_owner(x);
 		printf(" -> %d:", y->v_order);
-		lf_print_owner(y->v_owner);
+		lf_print_vertex_owner(y);
 		printf("\n");
 	}
 #endif
@@ -2374,9 +2391,9 @@ graph_remove_edge(struct owner_graph *g, struct owner_vertex *x,
 #ifdef LOCKF_DEBUG
 		if (lockf_debug & 8) {
 			printf("removing edge %d:", x->v_order);
-			lf_print_owner(x->v_owner);
+			lf_print_vertex_owner(x);
 			printf(" -> %d:", y->v_order);
-			lf_print_owner(y->v_owner);
+			lf_print_vertex_owner(y);
 			printf("\n");
 		}
 #endif
@@ -2414,9 +2431,39 @@ graph_alloc_vertex(struct owner_graph *g, struct lock_owner *lo)
 
 	LIST_INIT(&v->v_outedges);
 	LIST_INIT(&v->v_inedges);
-	v->v_owner = lo;
+	v->v_refs = 1;
+	v->v_flags = lo->lo_flags;
+	v->v_id = lo->lo_id;
+	v->v_pid = lo->lo_pid;
+	v->v_sysid = lo->lo_sysid;
 
 	return (v);
+}
+
+/* The owner hash buckets by vnode, so an owner may have several lock_owners. */
+static int
+graph_vertex_matches(struct owner_vertex *v, struct lock_owner *lo)
+{
+
+	if (((v->v_flags ^ lo->lo_flags) & (F_REMOTE | F_FLOCK)) != 0)
+		return (0);
+	if (lo->lo_flags & F_REMOTE)
+		return (v->v_pid == lo->lo_pid && v->v_sysid == lo->lo_sysid);
+	return (v->v_id == lo->lo_id);
+}
+
+static struct owner_vertex *
+graph_find_vertex(struct owner_graph *g, struct lock_owner *lo)
+{
+	int i;
+
+	sx_assert(&lf_owner_graph_lock, SX_XLOCKED);
+
+	for (i = 0; i < g->g_size; i++) {
+		if (graph_vertex_matches(g->g_vertices[i], lo))
+			return (g->g_vertices[i]);
+	}
+	return (NULL);
 }
 
 static void
@@ -2593,17 +2640,30 @@ SYSCTL_PROC(_kern, KERN_LOCKF, lockf,
  * Print description of a lock owner
  */
 static void
+lf_print_owner_id(int flags, caddr_t id, pid_t pid, int sysid)
+{
+
+	if (flags & F_REMOTE) {
+		printf("remote pid %d, system %d", pid, sysid);
+	} else if (flags & F_FLOCK) {
+		printf("file %p", id);
+	} else {
+		printf("local pid %d", pid);
+	}
+}
+
+static void
 lf_print_owner(struct lock_owner *lo)
 {
 
-	if (lo->lo_flags & F_REMOTE) {
-		printf("remote pid %d, system %d",
-		    lo->lo_pid, lo->lo_sysid);
-	} else if (lo->lo_flags & F_FLOCK) {
-		printf("file %p", lo->lo_id);
-	} else {
-		printf("local pid %d", lo->lo_pid);
-	}
+	lf_print_owner_id(lo->lo_flags, lo->lo_id, lo->lo_pid, lo->lo_sysid);
+}
+
+static void
+lf_print_vertex_owner(struct owner_vertex *v)
+{
+
+	lf_print_owner_id(v->v_flags, v->v_id, v->v_pid, v->v_sysid);
 }
 
 /*
