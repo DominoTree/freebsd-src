@@ -28,6 +28,7 @@ void	clock_init(void);
 void	lapic_calibrate(void);
 void	tsc_init(void);
 void	tsc_calibrate(void);
+int	tsc_freq_effective(int cpu_id, u_int *freq, uint64_t *age_us);
 
 /*
  * Driver to clock driver interface.

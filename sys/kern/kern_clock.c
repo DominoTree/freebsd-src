@@ -371,6 +371,8 @@ int	profhz;
 int	profprocs;
 int	psratio;
 
+void	(*cpu_freq_tick)(void);
+
 DPCPU_DEFINE_STATIC(long, pcputicks);	/* Per-CPU version of ticks. */
 #ifdef DEVICE_POLLING
 static int devpoll_run = 0;
@@ -691,6 +693,9 @@ statclock(int cnt, int usermode)
 	long rss;
 	long *cp_time;
 	uint64_t runtime, new_switchtime;
+
+	if (cpu_freq_tick != NULL)
+		cpu_freq_tick();
 
 	td = curthread;
 	p = td->td_proc;
