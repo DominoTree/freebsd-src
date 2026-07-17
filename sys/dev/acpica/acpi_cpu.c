@@ -189,6 +189,8 @@ static int	acpi_cpu_cx_lowest_sysctl(SYSCTL_HANDLER_ARGS);
 static int	acpi_cpu_global_cx_lowest_sysctl(SYSCTL_HANDLER_ARGS);
 #if defined(__i386__) || defined(__amd64__)
 static int	acpi_cpu_method_sysctl(SYSCTL_HANDLER_ARGS);
+static int	acpi_cpu_freq_effective_sysctl(SYSCTL_HANDLER_ARGS);
+static int	acpi_cpu_freq_effective_age_sysctl(SYSCTL_HANDLER_ARGS);
 #endif
 
 static device_method_t acpi_cpu_methods[] = {
@@ -451,6 +453,21 @@ acpi_cpu_attach(device_t dev)
 
     /* Probe for Cx state support. */
     acpi_cpu_cx_probe(sc);
+
+#if defined(__i386__) || defined(__amd64__)
+    if (tsc_is_invariant && tsc_perf_stat) {
+	SYSCTL_ADD_PROC(&sc->cpu_sysctl_ctx,
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->cpu_dev)), OID_AUTO,
+	    "freq_effective", CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE,
+	    (void *)sc, 0, acpi_cpu_freq_effective_sysctl, "I",
+	    "Measured effective CPU frequency in MHz");
+	SYSCTL_ADD_PROC(&sc->cpu_sysctl_ctx,
+	    SYSCTL_CHILDREN(device_get_sysctl_tree(sc->cpu_dev)), OID_AUTO,
+	    "freq_effective_age", CTLTYPE_U64 | CTLFLAG_RD | CTLFLAG_MPSAFE,
+	    (void *)sc, 0, acpi_cpu_freq_effective_age_sysctl, "QU",
+	    "Age of the freq_effective sample in microseconds");
+    }
+#endif
 
     return (0);
 }
@@ -1469,6 +1486,34 @@ acpi_cpu_method_sysctl(SYSCTL_HANDLER_ARGS)
 	error = sbuf_finish(&sb);
 	sbuf_delete(&sb);
 	return (error);
+}
+
+static int
+acpi_cpu_freq_effective_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct acpi_cpu_softc *sc = (struct acpi_cpu_softc *)arg1;
+	uint64_t age_us;
+	u_int freq;
+	int error;
+
+	error = tsc_freq_effective(sc->cpu_pcpu->pc_cpuid, &freq, &age_us);
+	if (error != 0)
+		return (error);
+	return (sysctl_handle_int(oidp, &freq, 0, req));
+}
+
+static int
+acpi_cpu_freq_effective_age_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	struct acpi_cpu_softc *sc = (struct acpi_cpu_softc *)arg1;
+	uint64_t age_us;
+	u_int freq;
+	int error;
+
+	error = tsc_freq_effective(sc->cpu_pcpu->pc_cpuid, &freq, &age_us);
+	if (error != 0)
+		return (error);
+	return (sysctl_handle_64(oidp, &age_us, 0, req));
 }
 #endif
 
