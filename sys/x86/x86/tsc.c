@@ -36,6 +36,7 @@
 #include <sys/eventhandler.h>
 #include <sys/limits.h>
 #include <sys/malloc.h>
+#include <sys/pcpu.h>
 #include <sys/proc.h>
 #include <sys/sched.h>
 #include <sys/sysctl.h>
@@ -59,6 +60,15 @@ uint64_t	tsc_freq;
 int		tsc_is_invariant;
 int		tsc_perf_stat;
 static int	tsc_early_calib_exact;
+
+/* aperf and mperf are owner-only; freq and ticks are published cross-CPU. */
+struct tsc_perf_sample {
+	uint64_t	aperf;
+	uint64_t	mperf;
+	u_int		freq;
+	int		ticks;
+};
+DPCPU_DEFINE_STATIC(struct tsc_perf_sample, tsc_perf_sample);
 
 static eventhandler_tag tsc_levels_tag, tsc_pre_tag, tsc_post_tag;
 
@@ -430,6 +440,58 @@ probe_tsc_freq_late(void)
 	}
 }
 
+static void
+tsc_freq_tick(void)
+{
+	struct tsc_perf_sample *sample;
+	uint64_t aperf, aperf_delta, freq, mperf, mperf_delta, perf;
+
+	sample = DPCPU_PTR(tsc_perf_sample);
+	aperf = rdmsr(MSR_APERF);
+	mperf = rdmsr(MSR_MPERF);
+
+	/* Both counters reset to zero across suspend and resume. */
+	if (__predict_false(aperf < sample->aperf || mperf <= sample->mperf))
+		goto out;
+
+	aperf_delta = aperf - sample->aperf;
+	mperf_delta = mperf - sample->mperf;
+	freq = atomic_load_acq_64(&tsc_freq);
+	if (freq == 0 || aperf_delta > UINT64_MAX / 1000000)
+		goto out;
+	perf = 1000000 * aperf_delta / mperf_delta;
+	if (perf > UINT64_MAX / freq)
+		goto out;
+	sample->freq = freq * perf / 1000000 / 1000000;
+	sample->ticks = ticks;
+out:
+	sample->aperf = aperf;
+	sample->mperf = mperf;
+}
+
+/*
+ * The counters advance only in C0, so a parked core reports the clock it last
+ * ran at; age_us lets the caller judge how long ago that was.
+ */
+int
+tsc_freq_effective(int cpu_id, u_int *freq, uint64_t *age_us)
+{
+	const struct tsc_perf_sample *sample;
+	int age;
+
+	if (!tsc_is_invariant || !tsc_perf_stat)
+		return (EOPNOTSUPP);
+	if (cpu_id < 0 || cpu_id > mp_maxid || CPU_ABSENT(cpu_id))
+		return (EINVAL);
+	sample = DPCPU_ID_PTR(cpu_id, tsc_perf_sample);
+	if (sample->freq == 0)
+		return (EOPNOTSUPP);
+	age = ticks - sample->ticks;
+	*freq = sample->freq;
+	*age_us = (uint64_t)(age < 0 ? 0 : age) * tick;
+	return (0);
+}
+
 void
 start_TSC(void)
 {
@@ -465,6 +527,10 @@ start_TSC(void)
 	 */
 	if (tsc_freq != 0)
 		set_cputicker(rdtsc, tsc_freq, !tsc_is_invariant);
+
+	/* tsc_freq is the base clock only when the TSC is invariant. */
+	if (tsc_is_invariant && tsc_perf_stat)
+		cpu_freq_tick = tsc_freq_tick;
 
 	if (tsc_is_invariant)
 		return;
