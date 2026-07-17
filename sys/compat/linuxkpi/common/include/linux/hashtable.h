@@ -60,8 +60,8 @@ struct lkpi_hash_head {
 #define	HASH_SIZE(name) ARRAY_SIZE(name)
 #define	HASH_BITS(name) ilog2(HASH_SIZE(name))
 
-#define	hash_min(...) \
-	hash_long(__VA_ARGS__)
+#define	hash_min(val, bits) \
+	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
 
 static inline void
 __hash_init(struct lkpi_hash_head *ht, unsigned long size)
