@@ -95,9 +95,9 @@ VNET_DEFINE_STATIC(struct gif_list, ipv6_list) = CK_LIST_HEAD_INITIALIZER();
 #define	V_ipv6_list		VNET(ipv6_list)
 
 #define	GIF_HASH(src, dst)	(V_ipv6_hashtbl[\
-    in6_gif_hashval((src), (dst)) & (V_ipv6_hashmask - 1)])
+    in6_gif_hashval((src), (dst)) & V_ipv6_hashmask])
 #define	GIF_SRCHASH(src)	(V_ipv6_srchashtbl[\
-    fnv_32_buf((src), sizeof(*src), FNV1_32_INIT) & (V_ipv6_hashmask - 1)])
+    fnv_32_buf((src), sizeof(*src), FNV1_32_INIT) & V_ipv6_hashmask])
 #define	GIF_HASH_SC(sc)		GIF_HASH(&(sc)->gif_ip6hdr->ip6_src,\
     &(sc)->gif_ip6hdr->ip6_dst)
 static uint32_t
