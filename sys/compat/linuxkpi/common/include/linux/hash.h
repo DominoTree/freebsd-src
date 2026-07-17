@@ -29,7 +29,6 @@
 #ifndef _LINUXKPI_LINUX_HASH_H_
 #define	_LINUXKPI_LINUX_HASH_H_
 
-#include <sys/hash.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 
@@ -37,34 +36,32 @@
 
 #include <linux/bitops.h>
 
-static inline u64
-hash_64(u64 val, u8 bits)
+/* Knuth, TAOCP vol 3, sec 6.4: multiply by 2^N * (1 - phi); use high bits. */
+#define	GOLDEN_RATIO_32	0x61C88647U
+#define	GOLDEN_RATIO_64	0x61C8864680B583EBULL
+
+static inline u32
+__hash_32(u32 val)
 {
-	u64 ret;
-	u8 x;
 
-	ret = bits;
-
-	for (x = 0; x != sizeof(ret); x++) {
-		u64 chunk = (val >> (8 * x)) & 0xFF;
-		ret = HASHSTEP(ret, chunk);
-	}
-	return (ret >> (64 - bits));
+	return (val * GOLDEN_RATIO_32);
 }
 
 static inline u32
-hash_32(u32 val, u8 bits)
+hash_32(u32 val, unsigned int bits)
 {
-	u32 ret;
-	u8 x;
 
-	ret = bits;
+	return (__hash_32(val) >> (32 - bits));
+}
 
-	for (x = 0; x != sizeof(ret); x++) {
-		u32 chunk = (val >> (8 * x)) & 0xFF;
-		ret = HASHSTEP(ret, chunk);
-	}
-	return (ret >> (32 - bits));
+static inline u32
+hash_64(u64 val, unsigned int bits)
+{
+#if BITS_PER_LONG == 64
+	return ((u32)((val * GOLDEN_RATIO_64) >> (64 - bits)));
+#else
+	return (hash_32((u32)val ^ __hash_32(val >> 32), bits));
+#endif
 }
 
 #if BITS_PER_LONG == 64
