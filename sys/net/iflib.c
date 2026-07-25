@@ -5480,6 +5480,8 @@ iflib_device_deregister(if_ctx_t ctx)
 	iflib_unregister_vlan_handlers(ctx);
 
 	iflib_netmap_detach(ifp);
+	/* A task past the IFC_IN_DETACH check can still re-arm if_linktask. */
+	taskqueue_drain(ctx->ifc_tq, &ctx->ifc_admin_task);
 	ether_ifdetach(ifp);
 
 	CTX_LOCK(ctx);
