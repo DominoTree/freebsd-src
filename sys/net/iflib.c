@@ -5293,7 +5293,7 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 	/* Get memory for the station queues */
 	if ((err = iflib_queues_alloc(ctx))) {
 		device_printf(dev, "Unable to allocate queue memory\n");
-		goto fail_intr_free;
+		goto fail_detach_driver;
 	}
 
 	if ((err = iflib_qset_structures_setup(ctx)))
@@ -5399,8 +5399,6 @@ fail_detach:
 	ether_ifdetach(ctx->ifc_ifp);
 	CTX_LOCK(ctx);
 fail_queues:
-	sysctl_ctx_free(&ctx->ifc_sysctl_ctx);
-	ctx->ifc_sysctl_node = NULL;
 	/*
 	 * Drain without holding CTX_LOCK so _task_fn_admin can run to
 	 * completion if it needs the context lock.  On fail_detach we already
@@ -5412,7 +5410,11 @@ fail_queues:
 	iflib_tqg_detach(ctx);
 	iflib_tx_structures_free(ctx);
 	iflib_rx_structures_free(ctx);
+fail_detach_driver:
 	/*
+	 * iflib_queues_alloc() releases its own queue memory, so that failure
+	 * path joins here rather than at fail_queues.
+	 *
 	 * Match iflib_device_deregister: IFDI_DETACH before taskqueue_free.
 	 * Avoid IFNET_WLOCK across driver detach (LinuxKPI workqueue drain).
 	 */
@@ -5421,11 +5423,12 @@ fail_queues:
 	IFDI_QUEUES_FREE(ctx);
 	IFNET_WLOCK();
 	taskqueue_free(ctx->ifc_tq);
-fail_intr_free:
 	iflib_free_intr_mem(ctx);
 fail_unlock:
 	CTX_UNLOCK(ctx);
 	IFNET_WUNLOCK();
+	sysctl_ctx_free(&ctx->ifc_sysctl_ctx);
+	ctx->ifc_sysctl_node = NULL;
 	iflib_deregister(ctx);
 	device_set_softc(ctx->ifc_dev, NULL);
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
