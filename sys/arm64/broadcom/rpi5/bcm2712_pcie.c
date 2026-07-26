@@ -250,9 +250,10 @@ bcm2712_pcie_detach(device_t dev)
 
 	bus_teardown_intr(dev, sc->irq_res, sc->intr_cookie);
 	bus_release_resource(dev, SYS_RES_IRQ, 0, sc->irq_res);
-	if (sc->pciecfg_mapped)
+	if (sc->pciecfg_mapped) {
 		g_pciecfg_mapped = 0;
 		bus_space_unmap(sc->pciecfg_bst, sc->pciecfg_bsh, PCIE_CFG_SIZE);
+	}
 	if (sc->cfg_res != NULL)
 		bus_release_resource(dev, SYS_RES_MEMORY, 1, sc->cfg_res);
 	bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->mac_res);
