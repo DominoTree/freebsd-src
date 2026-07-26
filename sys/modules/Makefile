@@ -355,6 +355,7 @@ SUBDIR=	\
 	rge \
 	rl \
 	${_rockchip} \
+	${_rpi5} \
 	rtsx \
 	${_rtw88} \
 	${_rtw89} \
@@ -675,6 +676,7 @@ _mpi3mr=mpi3mr
 # Specific to the Raspberry Pi.
 .if ${MACHINE_CPUARCH} == "aarch64"
 _genet=		genet
+_rpi5=		rpi5
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "aarch64" || \
