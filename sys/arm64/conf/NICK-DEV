@@ -1,0 +1,23 @@
+include GENERIC
+ident		NICK-DEV
+
+# Full -CURRENT debugger defaults, pinned so they survive a switch to a stable
+# branch, where GENERIC drops its own "include std.debug".
+include "std.debug"
+
+# Driver debug msgs live inline in std.dev, not in std.debug; pin them too.
+options 	IEEE80211_DEBUG		# enable debug msgs
+options 	USB_DEBUG		# enable debug msgs
+options 	HID_DEBUG		# enable debug msgs
+
+# Sanity checks INVARIANTS alone does not cover.
+options 	DIAGNOSTIC
+
+# The board is headless, so a panic has to dump and reboot rather than sit at
+# the DDB prompt on the serial console with the machine off the network.
+options 	KDB_UNATTENDED
+
+# Kernel-owned RSS: canonical Toeplitz hash key + indirection table mapping
+# flows to CPUs for end-to-end CPU affinity (RX queue -> netisr -> matching
+# TX queue).  Drivers program the NIC's RSS table from the kernel's.
+options		RSS
