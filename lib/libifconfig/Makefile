@@ -43,4 +43,7 @@ CLEANFILES+= ${GEN}
 CFLAGS+= -I${.CURDIR} -I${.OBJDIR}
 NO_WCAST_ALIGN= yes
 
+HAS_TESTS=
+SUBDIR.${MK_TESTS}+= tests
+
 .include <bsd.lib.mk>
