@@ -58,6 +58,7 @@ FBSD_1.6 {
 	bias_mA;
 	power_dBm;
 	power_mW;
+	temp_C;
 
 	/* Auto-generated. */
 	ifconfig_sfp_cab_tech_description;
