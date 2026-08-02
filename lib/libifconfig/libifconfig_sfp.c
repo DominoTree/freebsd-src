@@ -491,6 +491,9 @@ get_sff_temp(struct i2c_info *ii, uint8_t addr, uint8_t off)
 	uint8_t buf[2];
 
 	read_i2c(ii, addr, off, 2, buf);
+	if (ii->error != 0)
+		return (0);
+
 	return (temp_C((buf[0] << 8) | buf[1]));
 }
 
@@ -505,6 +508,9 @@ get_sff_voltage(struct i2c_info *ii, uint8_t addr, uint8_t off)
 	uint8_t buf[2];
 
 	read_i2c(ii, addr, off, 2, buf);
+	if (ii->error != 0)
+		return (0);
+
 	d = (double)((buf[0] << 8) | buf[1]);
 	return (d / 10000);
 }
