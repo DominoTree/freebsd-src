@@ -708,6 +708,7 @@ static void bxe_del_cdev(struct bxe_softc *sc);
 int bxe_grc_dump(struct bxe_softc *sc);
 static int bxe_alloc_buf_rings(struct bxe_softc *sc);
 static void bxe_free_buf_rings(struct bxe_softc *sc);
+static int bxe_get_cur_phy_idx(struct bxe_softc *sc);
 
 /* calculate crc32 on a buffer (NOTE: crc32_length MUST be aligned to 8) */
 uint32_t
@@ -4481,6 +4482,47 @@ bxe_handle_chip_tq(void *context,
 }
 
 /*
+ * Reads from the SFP+ module i2c bus on behalf of SIOCGI2C.
+ *
+ * Returns:
+ *   0 = Success, >0 Failure
+ */
+static int
+bxe_i2c_req(struct bxe_softc *sc,
+            struct ifi2creq  *req)
+{
+    struct elink_phy *phy;
+    elink_status_t rc;
+
+    if ((req->dev_addr != ELINK_I2C_DEV_ADDR_A0) &&
+        (req->dev_addr != ELINK_I2C_DEV_ADDR_A2)) {
+        return (EINVAL);
+    }
+
+    if (req->len > sizeof(req->data)) {
+        return (EINVAL);
+    }
+
+    /* The PHY is not programmed until the interface has been brought up. */
+    if (!(if_getdrvflags(sc->ifp) & IFF_DRV_RUNNING)) {
+        return (ENXIO);
+    }
+
+    phy = &sc->link_params.phy[bxe_get_cur_phy_idx(sc)];
+
+    bxe_acquire_phy_lock(sc);
+    rc = elink_read_sfp_module_eeprom(phy, &sc->link_params, req->dev_addr,
+                                      req->offset, req->len, req->data);
+    bxe_release_phy_lock(sc);
+
+    if (rc == ELINK_OP_NOT_SUPPORTED) {
+        return (EOPNOTSUPP);
+    }
+
+    return ((rc == ELINK_STATUS_OK) ? 0 : EIO);
+}
+
+/*
  * Handles any IOCTL calls from the operating system.
  *
  * Returns:
@@ -4680,6 +4722,26 @@ bxe_ioctl(if_t ifp,
               (command & 0xff));
         error = ifmedia_ioctl(ifp, ifr, &sc->ifmedia, command);
         break;
+
+    case SIOCGI2C:
+    {
+        struct ifi2creq i2c;
+
+        BLOGD(sc, DBG_IOCTL, "Received SIOCGI2C ioctl\n");
+
+        error = copyin(ifr_data_get_ptr(ifr), &i2c, sizeof(i2c));
+        if (error) {
+            break;
+        }
+
+        error = bxe_i2c_req(sc, &i2c);
+        if (error) {
+            break;
+        }
+
+        error = copyout(&i2c, ifr_data_get_ptr(ifr), sizeof(i2c));
+        break;
+    }
 
     default:
         BLOGD(sc, DBG_IOCTL, "Received Unknown Ioctl (cmd=%lu)\n",
