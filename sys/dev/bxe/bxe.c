@@ -15803,6 +15803,39 @@ bxe_init_multi_cos(struct bxe_softc *sc)
 }
 
 static int
+bxe_read_temperature(struct bxe_softc *sc, int *decikelvin)
+{
+    uint32_t temp;
+
+    if (!SHMEM2_HAS(sc, temperature_in_half_celsius)) {
+        return (ENOTSUP);
+    }
+
+    temp = SHMEM2_RD(sc, temperature_in_half_celsius);
+    if (temp == 0) {
+        return (ENXIO);
+    }
+
+    /* half degrees Celsius -> decikelvin */
+    *decikelvin = (int)(temp * 5 + 2732);
+
+    return (0);
+}
+
+static int
+bxe_sysctl_temperature(SYSCTL_HANDLER_ARGS)
+{
+    struct bxe_softc *sc = (struct bxe_softc *)arg1;
+    int rc, val;
+
+    if ((rc = bxe_read_temperature(sc, &val)) != 0) {
+        return (rc);
+    }
+
+    return (sysctl_handle_int(oidp, &val, 0, req));
+}
+
+static int
 bxe_sysctl_state(SYSCTL_HANDLER_ARGS)
 {
     struct bxe_softc *sc;
@@ -15984,7 +16017,7 @@ bxe_add_sysctls(struct bxe_softc *sc)
     struct sysctl_oid_list *queue_top_children, *queue_children;
     char queue_num_buf[32];
     uint32_t q_stat;
-    int i, j;
+    int i, j, temp_dk;
 
     ctx = device_get_sysctl_ctx(sc->dev);
     children = SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev));
@@ -16063,6 +16096,12 @@ bxe_add_sysctls(struct bxe_softc *sc)
     SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "state",
         CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
         bxe_sysctl_state, "IU", "dump driver state");
+
+    if (bxe_read_temperature(sc, &temp_dk) == 0) {
+        SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "temperature",
+            CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
+            bxe_sysctl_temperature, "IK", "device temperature");
+    }
 
     for (i = 0; i < BXE_NUM_ETH_STATS; i++) {
         SYSCTL_ADD_PROC(ctx, children, OID_AUTO,
