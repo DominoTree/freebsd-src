@@ -478,7 +478,7 @@ ifconfig_sfp_get_sfp_vendor_info(ifconfig_handle_t *h,
 
 /*
  * Converts internal temperature (SFF-8472, SFF-8436)
- * 16-bit unsigned value to human-readable representation:
+ * 16-bit signed value to human-readable representation:
  *
  * Internally measured Module temperature are represented
  * as a 16-bit signed twos complement value in increments of
@@ -488,13 +488,10 @@ ifconfig_sfp_get_sfp_vendor_info(ifconfig_handle_t *h,
 static double
 get_sff_temp(struct i2c_info *ii, uint8_t addr, uint8_t off)
 {
-	double d;
 	uint8_t buf[2];
 
 	read_i2c(ii, addr, off, 2, buf);
-	d = (double)buf[0];
-	d += (double)buf[1] / 256;
-	return (d);
+	return (temp_C((buf[0] << 8) | buf[1]));
 }
 
 /*
@@ -535,6 +532,13 @@ bias_mA(uint16_t bias)
 {
 	/* Bias current is specified in units of 2 uA. */
 	return (1.0 * bias / 500);
+}
+
+double
+temp_C(uint16_t temp)
+{
+	/* Temperature is signed, in units of 1/256 degree Celsius. */
+	return (1.0 * (int16_t)temp / 256);
 }
 
 static uint16_t
