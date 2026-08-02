@@ -239,3 +239,11 @@ double power_dBm(uint16_t power);
  * @return	Bias current in milliamps (mA)
  */
 double bias_mA(uint16_t bias);
+
+/** Convert module temperature to degrees Celsius
+ * This is provided as a convenience for displaying module temperatures.
+ * @see (struct ifconfig_sfp_status).temp
+ * @param temp	Temperature in signed 1/256 degree Celsius units
+ * @return	Temperature in degrees Celsius (C)
+ */
+double temp_C(uint16_t temp);
