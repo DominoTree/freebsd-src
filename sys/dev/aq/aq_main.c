@@ -201,6 +201,7 @@ static void aq_if_vlan_unregister(if_ctx_t ctx, uint16_t vtag);
 
 /* Informational/diagnostic */
 static void	aq_if_led_func(if_ctx_t ctx, int onoff);
+static int	aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req);
 
 static device_method_t aq_methods[] = {
 	DEVMETHOD(device_register, aq_register),
@@ -267,6 +268,7 @@ static device_method_t aq_if_methods[] = {
 
 	/* Informational/diagnostic */
 	DEVMETHOD(ifdi_led_func, aq_if_led_func),
+	DEVMETHOD(ifdi_i2c_req, aq_if_i2c_req),
 
 	DEVMETHOD_END
 };
@@ -1232,6 +1234,22 @@ aq_if_led_func(if_ctx_t ctx, int onoff)
 		hw->fw_ops->led_control(hw, onoff);
 
 	AQ_DBG_EXIT(0);
+}
+
+static int
+aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+	struct aq_hw  *hw = &softc->hw;
+
+	if (softc->media_type != AQ_MEDIA_TYPE_FIBRE)
+		return (ENXIO);
+
+	if (hw->fw_ops == NULL || hw->fw_ops->get_module_eeprom == NULL)
+		return (EOPNOTSUPP);
+
+	return (hw->fw_ops->get_module_eeprom(hw, req->dev_addr, req->offset,
+	    req->len, req->data));
 }
 
 static int
