@@ -709,6 +709,7 @@ int bxe_grc_dump(struct bxe_softc *sc);
 static int bxe_alloc_buf_rings(struct bxe_softc *sc);
 static void bxe_free_buf_rings(struct bxe_softc *sc);
 static int bxe_get_cur_phy_idx(struct bxe_softc *sc);
+static int bxe_media_detect(struct bxe_softc *sc);
 
 /* calculate crc32 on a buffer (NOTE: crc32_length MUST be aligned to 8) */
 uint32_t
@@ -7058,6 +7059,9 @@ bxe_link_attn(struct bxe_softc *sc)
     elink_link_update(&sc->link_params, &sc->link_vars);
 
     if (sc->link_vars.link_up) {
+
+        /* elink has classified the module by now, unlike at attach */
+        bxe_media_detect(sc);
 
         /* dropless flow control */
         if (!CHIP_IS_E1(sc) && sc->dropless_fc) {
