@@ -61,6 +61,9 @@
 #define	LINUX_PR_GET_CHILD_SUBREAPER	37 /* Get child subreaper status */
 #define	LINUX_PR_SET_NO_NEW_PRIVS	38 /* Set no_new_privs attribute */
 #define	LINUX_PR_GET_NO_NEW_PRIVS	39 /* Get no_new_privs attribute */
+#define	LINUX_PR_SET_THP_DISABLE	41 /* Set THP disable attribute */
+#define	LINUX_PR_THP_DISABLE_EXCEPT_ADVISED	(1 << 1)
+#define	LINUX_PR_GET_THP_DISABLE	42 /* Get THP disable attribute */
 #define	LINUX_PR_SET_PTRACER	1499557217
 #define	LINUX_PR_SET_VMA	1398164801
 #define	LINUX_PR_SET_VMA_ANON_NAME	0
