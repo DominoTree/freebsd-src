@@ -1691,6 +1691,7 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 {
 	int error = 0, max_size, arg;
 	struct proc *p = td->td_proc;
+	struct linux_pemuldata *pem;
 	char comm[LINUX_MAX_COMM_LEN];
 	int pdeath_signal, trace_state;
 
@@ -1852,6 +1853,28 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 			return (error);
 		/* Linux returns the value as the syscall return */
 		td->td_retval[0] = arg == PROC_NO_NEW_PRIVS_ENABLE ? 1 : 0;
+		break;
+	case LINUX_PR_SET_THP_DISABLE:
+		if (args->arg4 != 0 || args->arg5 != 0)
+			return (EINVAL);
+		/* Flags are only accepted when disabling. */
+		if ((args->arg2 == 0 && args->arg3 != 0) ||
+		    (args->arg3 & ~LINUX_PR_THP_DISABLE_EXCEPT_ADVISED) != 0)
+			return (EINVAL);
+		pem = pem_find(p);
+		LINUX_PEM_XLOCK(pem);
+		pem->thp_disable = args->arg2 != 0 ? (1 | args->arg3) : 0;
+		LINUX_PEM_XUNLOCK(pem);
+		break;
+	case LINUX_PR_GET_THP_DISABLE:
+		if (args->arg2 != 0 || args->arg3 != 0 || args->arg4 != 0 ||
+		    args->arg5 != 0)
+			return (EINVAL);
+		pem = pem_find(p);
+		LINUX_PEM_SLOCK(pem);
+		/* Linux returns the value as the syscall return */
+		td->td_retval[0] = pem->thp_disable;
+		LINUX_PEM_SUNLOCK(pem);
 		break;
 	case LINUX_PR_SET_PTRACER:
 		linux_msg(td, "unsupported prctl PR_SET_PTRACER");
