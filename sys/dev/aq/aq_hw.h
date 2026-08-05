@@ -204,6 +204,9 @@ struct aq_hw {
 	uint32_t mbox_addr;
 	struct aq_hw_fw_mbox mbox;
 
+	/* Atlantic 1: firmware RPC buffer, discovered on first use. */
+	uint32_t rpc_addr;
+
 	u_long flags;
 
 	uint32_t tx_rings_count;
@@ -375,6 +378,8 @@ int aq_hw_get_link_state(struct aq_hw *hw, uint32_t *link_speed,
 int aq_hw_set_link_speed(struct aq_hw *hw, uint32_t speed);
 
 int aq_hw_fw_downld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p, uint32_t cnt);
+int aq_hw_fw_upld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p,
+    uint32_t cnt);
 
 int aq_hw_reset(struct aq_hw *hw, bool reboot);
 

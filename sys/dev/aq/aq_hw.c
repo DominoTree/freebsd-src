@@ -135,6 +135,46 @@ err_exit:
 }
 
 int
+aq_hw_fw_upld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p, uint32_t cnt)
+{
+	uint32_t offset;
+	int err;
+
+	/* The B1 sequence addresses the config area relatively. */
+	if (IS_CHIP_FEATURE(hw, REVISION_B1) &&
+	    (hw->rpc_addr == 0 || a < hw->rpc_addr))
+		return (EINVAL);
+
+	err = AQ_HW_WAIT_FOR(reg_glb_cpu_sem_get(hw, AQ_HW_FW_SM_RAM) == 1U, 1U,
+	    10000U);
+	if (err != 0)
+		return (err);
+
+	if (IS_CHIP_FEATURE(hw, REVISION_B1)) {
+		offset = a - hw->rpc_addr;
+		for (; cnt-- && !err; ++p, offset += 4) {
+			mif_mcp_up_cfg_data_set(hw, *p);
+			mif_mcp_up_cfg_ctrl_set(hw, offset);
+			mcp_up_force_interrupt_set(hw, 1);
+			err = AQ_HW_WAIT_FOR(mif_mcp_up_cfg_write_done_get(hw),
+			    10U, 1000U);
+		}
+	} else {
+		mif_mcp_up_mailbox_addr_set(hw, a);
+		for (; cnt-- && !err; ++p) {
+			mif_mcp_up_mailbox_data_set(hw, *p);
+			mif_mcp_up_mailbox_write_execute(hw);
+			err = AQ_HW_WAIT_FOR(!mif_mcp_up_mailbox_busy_get(hw),
+			    10U, 1000U);
+		}
+	}
+
+	reg_glb_cpu_sem_set(hw, 1U, AQ_HW_FW_SM_RAM);
+
+	return (err);
+}
+
+int
 aq_hw_ver_match(const struct aq_hw_fw_version* ver_expected,
     const struct aq_hw_fw_version* ver_actual)
 {
