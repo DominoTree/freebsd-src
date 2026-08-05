@@ -44,6 +44,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if_media.h>
 #include <net/if_var.h>
 #include <net/iflib.h>
+#include <net/sff8472.h>
 
 #include "aq_device.h"
 
@@ -51,24 +52,111 @@ __FBSDID("$FreeBSD$");
 #include "aq_dbg.h"
 
 /*
- * Single source of truth for the supported link speeds.
- *
- * TODO: Split this by media type so the AQC100 SFP+ devices use suitable
- * fibre/SFP+ IFM_* subtypes instead of advertising the copper IFM_*_T set.
+ * Single source of truth for the supported link speeds.  A zero fibre
+ * subtype means the speed has no standard pluggable equivalent.
  */
 static const struct aq_media_map {
 	uint32_t		link_bit;	/* AQ_LINK_* capability bit */
 	enum aq_fw_link_speed	fw_rate;	/* aq_fw_* rate */
-	int			ifm;		/* IFM_* media subtype */
+	int			ifm_tp;		/* IFM_* subtype, copper */
+	int			ifm_fibre;	/* IFM_* subtype, SFP cage */
 	uint32_t		mbps;		/* link speed, Mbit/s */
 } aq_media_types[] = {
-	{ AQ_LINK_10M,  aq_fw_10M,  IFM_10_T,   10 },
-	{ AQ_LINK_100M, aq_fw_100M, IFM_100_TX, 100 },
-	{ AQ_LINK_1G,   aq_fw_1G,   IFM_1000_T, 1000 },
-	{ AQ_LINK_2G5,  aq_fw_2G5,  IFM_2500_T, 2500 },
-	{ AQ_LINK_5G,   aq_fw_5G,   IFM_5000_T, 5000 },
-	{ AQ_LINK_10G,  aq_fw_10G,  IFM_10G_T,  10000 },
+	{ AQ_LINK_10M,  aq_fw_10M,  IFM_10_T,   0,            10 },
+	{ AQ_LINK_100M, aq_fw_100M, IFM_100_TX, IFM_100_FX,   100 },
+	{ AQ_LINK_1G,   aq_fw_1G,   IFM_1000_T, IFM_1000_SX,  1000 },
+	{ AQ_LINK_2G5,  aq_fw_2G5,  IFM_2500_T, IFM_2500_SX,  2500 },
+	{ AQ_LINK_5G,   aq_fw_5G,   IFM_5000_T, 0,            5000 },
+	{ AQ_LINK_10G,  aq_fw_10G,  IFM_10G_T,  IFM_10G_SFI,  10000 },
 };
+
+/* SFF-8472 table 3.5 compliance bits, relative to SFF_8472_TRANS_START. */
+#define	AQ_SFF_TRANS_10G	0		/* byte 3 */
+#define	  AQ_SFF_10G_SR		  0x10
+#define	  AQ_SFF_10G_LR		  0x20
+#define	  AQ_SFF_10G_LRM	  0x40
+#define	  AQ_SFF_10G_ER		  0x80
+#define	AQ_SFF_TRANS_1G		3		/* byte 6 */
+#define	  AQ_SFF_1G_SX		  0x01
+#define	  AQ_SFF_1G_LX		  0x02
+#define	  AQ_SFF_1G_CX		  0x04
+#define	  AQ_SFF_1G_T		  0x08
+#define	AQ_SFF_TRANS_CABLE	5		/* byte 8 */
+#define	  AQ_SFF_CABLE_ACTIVE	  0x04
+#define	  AQ_SFF_CABLE_PASSIVE	  0x08
+
+/* Names the medium in the cage, not what the cage could in principle hold. */
+static void
+aq_sfp_scan(struct aq_dev *aq_dev)
+{
+	struct aq_hw *hw = &aq_dev->hw;
+	uint8_t code[SFF_8472_TRANS_END - SFF_8472_TRANS_START + 1];
+	uint8_t cable;
+
+	aq_dev->sfp_ifm_1g = 0;
+	aq_dev->sfp_ifm_10g = 0;
+
+	if (hw->fw_ops == NULL || hw->fw_ops->get_module_eeprom == NULL)
+		return;
+
+	if (hw->fw_ops->get_module_eeprom(hw, SFF_8472_BASE,
+	    SFF_8472_TRANS_START, sizeof code, code) != 0)
+		return;
+
+	cable = code[AQ_SFF_TRANS_CABLE] &
+	    (AQ_SFF_CABLE_ACTIVE | AQ_SFF_CABLE_PASSIVE);
+
+	if (code[AQ_SFF_TRANS_10G] & AQ_SFF_10G_SR)
+		aq_dev->sfp_ifm_10g = IFM_10G_SR;
+	else if (code[AQ_SFF_TRANS_10G] & AQ_SFF_10G_LR)
+		aq_dev->sfp_ifm_10g = IFM_10G_LR;
+	else if (code[AQ_SFF_TRANS_10G] & AQ_SFF_10G_LRM)
+		aq_dev->sfp_ifm_10g = IFM_10G_LRM;
+	else if (code[AQ_SFF_TRANS_10G] & AQ_SFF_10G_ER)
+		aq_dev->sfp_ifm_10g = IFM_10G_ER;
+	else if (cable != 0)
+		aq_dev->sfp_ifm_10g = IFM_10G_TWINAX;
+
+	if (code[AQ_SFF_TRANS_1G] & AQ_SFF_1G_SX)
+		aq_dev->sfp_ifm_1g = IFM_1000_SX;
+	else if (code[AQ_SFF_TRANS_1G] & AQ_SFF_1G_LX)
+		aq_dev->sfp_ifm_1g = IFM_1000_LX;
+	else if (code[AQ_SFF_TRANS_1G] & AQ_SFF_1G_CX)
+		aq_dev->sfp_ifm_1g = IFM_1000_CX;
+	else if (code[AQ_SFF_TRANS_1G] & AQ_SFF_1G_T)
+		aq_dev->sfp_ifm_1g = IFM_1000_T;
+	else if (cable != 0)
+		aq_dev->sfp_ifm_1g = IFM_1000_CX;
+}
+
+/* Fibre parts prefer what the module reported over the table default. */
+static int
+aq_media_ifm(const struct aq_dev *aq_dev, u_int i)
+{
+	if (aq_dev->media_type != AQ_MEDIA_TYPE_FIBRE)
+		return (aq_media_types[i].ifm_tp);
+
+	if (aq_media_types[i].link_bit == AQ_LINK_10G &&
+	    aq_dev->sfp_ifm_10g != 0)
+		return (aq_dev->sfp_ifm_10g);
+	if (aq_media_types[i].link_bit == AQ_LINK_1G &&
+	    aq_dev->sfp_ifm_1g != 0)
+		return (aq_dev->sfp_ifm_1g);
+
+	return (aq_media_types[i].ifm_fibre);
+}
+
+/* A module read after attach can rename an already advertised speed. */
+static bool
+aq_media_matches(const struct aq_dev *aq_dev, u_int i, int user_media)
+{
+	if (user_media == aq_media_ifm(aq_dev, i))
+		return (true);
+
+	return (aq_dev->media_type == AQ_MEDIA_TYPE_FIBRE &&
+	    aq_media_types[i].ifm_fibre != 0 &&
+	    user_media == aq_media_types[i].ifm_fibre);
+}
 
 void
 aq_mediastatus_update(struct aq_dev *aq_dev, uint32_t link_speed,
@@ -76,6 +164,7 @@ const struct aq_hw_fc_info *fc_neg)
 {
 	struct aq_hw *hw = &aq_dev->hw;
 	u_int i;
+	int ifm;
 
 	aq_dev->media_active = 0;
 	if (fc_neg->fc_rx)
@@ -83,11 +172,20 @@ const struct aq_hw_fc_info *fc_neg)
 	if (fc_neg->fc_tx)
 		aq_dev->media_active |= IFM_ETH_TXPAUSE;
 
+	/* The module can be swapped while the port is down. */
+	if (aq_dev->media_type == AQ_MEDIA_TYPE_FIBRE && link_speed != 0)
+		aq_sfp_scan(aq_dev);
+
 	for (i = 0; i < nitems(aq_media_types); i++)
 		if (link_speed == aq_media_types[i].mbps)
 			break;
-	aq_dev->media_active |= i < nitems(aq_media_types) ?
-	    (aq_media_types[i].ifm | IFM_FDX) : IFM_NONE;
+
+	if (i == nitems(aq_media_types)) {
+		aq_dev->media_active |= IFM_NONE;
+	} else {
+		ifm = aq_media_ifm(aq_dev, i);
+		aq_dev->media_active |= (ifm != 0 ? ifm : IFM_OTHER) | IFM_FDX;
+	}
 
 	if (hw->link_rate == aq_fw_speed_auto)
 		aq_dev->media_active |= IFM_AUTO;
@@ -142,7 +240,7 @@ aq_mediachange(if_t ifp)
 
 	default:
 		for (i = 0; i < nitems(aq_media_types); i++)
-			if (user_media == aq_media_types[i].ifm)
+			if (aq_media_matches(aq_dev, i, user_media))
 				break;
 		if (i == nitems(aq_media_types)) {
 			device_printf(hw->dev, "unknown media: 0x%X\n",
@@ -189,15 +287,22 @@ aq_initmedia(struct aq_dev *aq_dev)
 
 	AQ_DBG_ENTER();
 
+	aq_dev->sfp_ifm_1g = 0;
+	aq_dev->sfp_ifm_10g = 0;
+
 	// ifconfig eth0 none
 	ifmedia_add(aq_dev->media, IFM_ETHER | IFM_NONE, 0, NULL);
 
 	ifmedia_add(aq_dev->media, IFM_ETHER | IFM_AUTO, 0, NULL);
 	aq_add_media_types(aq_dev, IFM_AUTO);
 
-	for (i = 0; i < nitems(aq_media_types); i++)
-		if (aq_dev->link_speeds & aq_media_types[i].link_bit)
-			aq_add_media_types(aq_dev, aq_media_types[i].ifm);
+	for (i = 0; i < nitems(aq_media_types); i++) {
+		if ((aq_dev->link_speeds & aq_media_types[i].link_bit) == 0)
+			continue;
+		if (aq_media_ifm(aq_dev, i) == 0)
+			continue;
+		aq_add_media_types(aq_dev, aq_media_ifm(aq_dev, i));
+	}
 
 	// link is initially autoselect
 	ifmedia_set(aq_dev->media,

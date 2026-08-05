@@ -102,6 +102,9 @@ struct aq_dev {
 	struct aq_hw          hw;
 
 	enum aq_media_type	media_type;
+	/* SFF-8472 subtypes of the module in the cage; 0 until one is read. */
+	int			sfp_ifm_1g;
+	int			sfp_ifm_10g;
 	uint32_t		link_speeds;
 	uint32_t		chip_features;
 	uint32_t		mbox_addr;
