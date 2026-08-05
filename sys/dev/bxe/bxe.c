@@ -710,6 +710,7 @@ static int bxe_alloc_buf_rings(struct bxe_softc *sc);
 static void bxe_free_buf_rings(struct bxe_softc *sc);
 static int bxe_get_cur_phy_idx(struct bxe_softc *sc);
 static int bxe_media_detect(struct bxe_softc *sc);
+static void bxe_media_refine_1g_sfp(struct bxe_softc *sc);
 
 /* calculate crc32 on a buffer (NOTE: crc32_length MUST be aligned to 8) */
 uint32_t
@@ -7062,6 +7063,7 @@ bxe_link_attn(struct bxe_softc *sc)
 
         /* elink has classified the module by now, unlike at attach */
         bxe_media_detect(sc);
+        bxe_media_refine_1g_sfp(sc);
 
         /* dropless flow control */
         if (!CHIP_IS_E1(sc) && sc->dropless_fc) {
@@ -13960,6 +13962,44 @@ bxe_media_detect(struct bxe_softc *sc)
         break;
     }
     return port_type;
+}
+
+/* SFF-8472 table 3.5 byte 6, gigabit ethernet compliance codes. */
+#define BXE_SFF_1G_COMP_ADDR   0x6
+#define BXE_SFF_1G_COMP_LX     (1 << 1)
+#define BXE_SFF_1G_COMP_CX     (1 << 2)
+#define BXE_SFF_1G_COMP_BASE_T (1 << 3)
+
+/*
+ * elink has no copper-SFP media type and calls every 1G module fiber.
+ * Name the medium from the module itself.  Caller holds the PHY lock.
+ */
+static void
+bxe_media_refine_1g_sfp(struct bxe_softc *sc)
+{
+    struct elink_phy *phy;
+    uint8_t comp;
+
+    phy = &sc->link_params.phy[bxe_get_cur_phy_idx(sc)];
+
+    if (phy->media_type != ELINK_ETH_PHY_SFP_1G_FIBER) {
+        return;
+    }
+
+    if (elink_read_sfp_module_eeprom(phy, &sc->link_params,
+                                     ELINK_I2C_DEV_ADDR_A0,
+                                     BXE_SFF_1G_COMP_ADDR, 1,
+                                     &comp) != ELINK_STATUS_OK) {
+        return;
+    }
+
+    if (comp & BXE_SFF_1G_COMP_BASE_T) {
+        sc->media = IFM_1000_T;
+    } else if (comp & BXE_SFF_1G_COMP_LX) {
+        sc->media = IFM_1000_LX;
+    } else if (comp & BXE_SFF_1G_COMP_CX) {
+        sc->media = IFM_1000_CX;
+    }
 }
 
 #define GET_FIELD(value, fname)                     \
