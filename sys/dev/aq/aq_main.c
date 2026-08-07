@@ -1528,7 +1528,8 @@ aq_sysctl_cable_diag(SYSCTL_HANDLER_ARGS)
 				    p->dist, p->far_dist);
 		}
 		/* The completion code is undocumented; report, do not judge. */
-		sbuf_printf(sb, "\nfirmware status %u", cd.status);
+		if (cd.has_status)
+			sbuf_printf(sb, "\nfirmware status %u", cd.status);
 		sbuf_cat(sb, "\n");
 	}
 

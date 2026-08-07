@@ -693,6 +693,7 @@ aq2_fw_cable_diag(struct aq_hw *hw, struct aq_hw_cable_diag *cd)
 	}
 	cd->status = (v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_STATUS) >>
 	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_STATUS_S;
+	cd->has_status = true;
 
 	err = aq2_fw_interface_buffer_read(hw,
 	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_REG, lane, sizeof(lane));

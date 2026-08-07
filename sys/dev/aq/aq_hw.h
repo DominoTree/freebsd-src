@@ -191,6 +191,7 @@ struct aq_hw_cable_pair {
 struct aq_hw_cable_diag {
 	struct aq_hw_cable_pair pair[AQ_CABLE_PAIRS];
 	uint8_t status;		/* firmware's own completion status */
+	bool has_status;	/* Atlantic 1 reports no such field */
 };
 
 struct aq_hw {

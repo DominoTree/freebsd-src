@@ -181,6 +181,7 @@ struct aq_fw2x_mailbox // struct fwHostInterface
 // MSM Statistics
 #define FW2X_CAP_STATISTICS (1ull << (32 + CAPS_HI_STATISTICS))
 #define FW2X_CAP_TEMPERATURE (1ull << (32 + CAPS_HI_TEMPERATURE))
+#define FW2X_CAP_CABLE_DIAG (1ull << (32 + CAPS_HI_CABLE_DIAG))
 
 // Pluggable module SMBus proxy
 #define FW2X_CAP_SMBUS_READ (1ull << CAPS_LO_SMBUS_READ)
@@ -259,6 +260,8 @@ aq_fw2x_reset(struct aq_hw* hw)
 	mtx_unlock(&hw->fw_mtx);
 	if (err == 0) {
 		hw->fw_caps = caps.caps_lo | ((uint64_t)caps.caps_hi << 32);
+		hw->cable_diag_capable =
+		    (hw->fw_caps & FW2X_CAP_CABLE_DIAG) != 0;
 		trace(hw, dbg_init,
 		     "fw2x> F/W capabilities mask = %llx",
 		     (unsigned long long)hw->fw_caps);
@@ -507,6 +510,82 @@ aq_fw2x_get_temp(struct aq_hw* hw, int* temp_mc)
 	*temp_mc = (int)(int16_t)(raw & 0xffff) * 1000 / 256;
 
 	return (0);
+}
+
+/* One 32-bit lane entry per twisted pair; distances are whole metres. */
+#define FW2X_CABLE_DIAG_RESULT		0x000000ff
+#define FW2X_CABLE_DIAG_DIST		0x0000ff00
+#define FW2X_CABLE_DIAG_DIST_S		8
+#define FW2X_CABLE_DIAG_FAR_DIST	0x00ff0000
+#define FW2X_CABLE_DIAG_FAR_DIST_S	16
+
+#define FW2X_CABLE_DIAG_POLLS		120
+
+/*
+ * Unlike the other fw2x requests this one runs for seconds, so the wait for
+ * the F/W to echo the request bit back sleeps rather than holding fw_mtx.
+ */
+static int
+aq_fw2x_cable_diag(struct aq_hw* hw, struct aq_hw_cable_diag* cd)
+{
+	struct aq_fw2x_phy_cable_diag_data diag;
+	uint64_t mpi_ctrl, req_bit;
+	int err, i, timo;
+
+	if ((hw->fw_caps & FW2X_CAP_CABLE_DIAG) == 0)
+		return (ENOTSUP);
+
+	mtx_lock(&hw->fw_mtx);
+	if (hw->cable_diag_busy) {
+		mtx_unlock(&hw->fw_mtx);
+		return (EBUSY);
+	}
+	hw->cable_diag_busy = true;
+	mpi_ctrl = get_mpi_ctrl(hw);
+	req_bit = mpi_ctrl & FW2X_CAP_CABLE_DIAG;
+	set_mpi_ctrl(hw, mpi_ctrl ^ FW2X_CAP_CABLE_DIAG);
+	mtx_unlock(&hw->fw_mtx);
+
+	err = 0;
+	for (timo = FW2X_CABLE_DIAG_POLLS; timo > 0; timo--) {
+		err = pause_sig("aqcdiag", hz / 4);
+		if (err == EINTR || err == ERESTART)
+			goto done;
+		mtx_lock(&hw->fw_mtx);
+		mpi_ctrl = get_mpi_state(hw);
+		mtx_unlock(&hw->fw_mtx);
+		if ((mpi_ctrl & FW2X_CAP_CABLE_DIAG) != req_bit)
+			break;
+	}
+	if (timo == 0) {
+		trace_error(hw, dbg_fw, "fw2x> cable diagnostic timed out");
+		err = ETIMEDOUT;
+		goto done;
+	}
+
+	mtx_lock(&hw->fw_mtx);
+	err = aq_hw_fw_downld_dwords(hw, hw->mbox_addr +
+	    offsetof(struct aq_fw2x_mailbox, diag_data), diag.lane_data,
+	    nitems(diag.lane_data));
+	mtx_unlock(&hw->fw_mtx);
+	if (err != 0)
+		goto done;
+
+	for (i = 0; i < AQ_CABLE_PAIRS; i++) {
+		cd->pair[i].result = diag.lane_data[i] &
+		    FW2X_CABLE_DIAG_RESULT;
+		cd->pair[i].dist = (diag.lane_data[i] &
+		    FW2X_CABLE_DIAG_DIST) >> FW2X_CABLE_DIAG_DIST_S;
+		cd->pair[i].far_dist = (diag.lane_data[i] &
+		    FW2X_CABLE_DIAG_FAR_DIST) >> FW2X_CABLE_DIAG_FAR_DIST_S;
+	}
+
+done:
+	mtx_lock(&hw->fw_mtx);
+	hw->cable_diag_busy = false;
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
 }
 
 static int
@@ -812,6 +891,7 @@ const struct aq_firmware_ops aq_fw2x_ops =
 	.get_stats = aq_fw2x_get_stats,
 	.get_temp = aq_fw2x_get_temp,
 	.get_phy_fault = aq_fw2x_get_phy_fault,
+	.cable_diag = aq_fw2x_cable_diag,
 	.phy_reset = aq_fw2x_phy_reset,
 	.thermal_arm = aq_fw2x_thermal_arm,
 	.get_thermal_limit = aq_fw2x_get_thermal_limit,
