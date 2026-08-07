@@ -288,6 +288,13 @@ aq_link_report_down(struct aq_dev *aq_dev)
 	int temp_mc;
 	uint16_t fault;
 
+	/* A cable diagnostic drops the link on purpose; do not diagnose it. */
+	if (hw->cable_diag_busy) {
+		device_printf(aq_dev->dev,
+		    "link DOWN, cable diagnostic in progress\n");
+		return;
+	}
+
 	sbuf_new(&sb, detail, sizeof(detail), SBUF_FIXEDLEN);
 
 	if (hw->fw_ops->get_phy_fault != NULL &&
@@ -392,7 +399,8 @@ aq_if_update_admin_status(if_ctx_t ctx)
 		return;
 	}
 
-	if (hw->fw_ops->get_phy_fault != NULL)
+	/* The fault the diagnostic latches is the test, not the adapter. */
+	if (hw->fw_ops->get_phy_fault != NULL && !hw->cable_diag_busy)
 		aq_thermal_poll(aq_dev);
 
 	aq_update_hw_stats(aq_dev);

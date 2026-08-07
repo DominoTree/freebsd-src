@@ -97,6 +97,30 @@ Comparing this against the transitions logged by the driver
 distinguishes a single link event from a flapping link.
 .El
 .Pp
+The following variable runs a cable diagnostic.
+It is present only on adapters whose firmware provides one:
+.Bl -tag -width indent
+.It Va cable_diag
+Writing any value runs a time-domain reflectometry test and stores the
+result; reading reports the result of the last run.
+The test drives pulses down each of the four pairs, so it
+.Em interrupts an established link
+for roughly twelve seconds.
+Each pair is reported as
+.Dq ok ,
+.Dq short ,
+.Dq open ,
+a low or high impedance mismatch, or a crossover to another named pair.
+A pair that is not
+.Dq ok
+also reports the approximate distance to the fault and to the far end,
+in metres.
+Only one test runs at a time; a write issued while one is already running
+fails with
+.Er EBUSY .
+A write blocks until the test finishes and can be interrupted.
+.El
+.Pp
 The following variables tune the driver's own tracing:
 .Bl -tag -width indent
 .It Va debug

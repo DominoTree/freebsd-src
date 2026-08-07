@@ -47,6 +47,7 @@ static int aq2_fw_get_link_counters(struct aq_hw *hw, uint32_t *up,
 static int aq2_fw_get_temp(struct aq_hw *hw, int *temp_mc);
 static int aq2_fw_get_thermal_limit(struct aq_hw *hw, int *limit_mc);
 static int aq2_fw_get_phy_hot_warning(struct aq_hw *hw, bool *hot);
+static int aq2_fw_cable_diag(struct aq_hw *hw, struct aq_hw_cable_diag *cd);
 
 /* Coherent OUT-window read, bracketed by the transaction id. */
 static int
@@ -181,6 +182,15 @@ aq2_fw_reboot(struct aq_hw *hw)
 	trace(hw, dbg_init, "aq2> ART filter base index = %u",
 	    hw->art_filter_base_index);
 
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_REG, &v, sizeof(v));
+	if (err != 0)
+		return (err);
+	hw->cable_diag_capable =
+	    (v & AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_CABLE_DIAG) != 0;
+	trace(hw, dbg_init, "aq2> cable diagnostic %ssupported",
+	    hw->cable_diag_capable ? "" : "not ");
+
 	return (0);
 }
 
@@ -207,6 +217,8 @@ aq2_fw_reset(struct aq_hw *hw)
 	uint32_t v;
 	int err;
 
+	mtx_lock(&hw->fw_mtx);
+
 	AQ_WRITE_REG_BIT(hw, AQ2_FW_INTERFACE_IN_LINK_CONTROL_REG,
 	    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE, 0,
 	    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE_ACTIVE);
@@ -224,10 +236,12 @@ aq2_fw_reset(struct aq_hw *hw)
 	v &= ~AQ2_FW_INTERFACE_IN_REQUEST_POLICY_PROMISC_RX_QUEUE_TX_INDEX;
 	AQ_WRITE_REG(hw, AQ2_FW_INTERFACE_IN_REQUEST_POLICY_REG, v);
 
+	err = aq2_fw_wait_shared_ack(hw);
+	mtx_unlock(&hw->fw_mtx);
+
 	trace(hw, dbg_init, "aq2> reset: mtu %u, request policy %#x",
 	    HW_ATL_B0_MTU_JUMBO, v);
 
-	err = aq2_fw_wait_shared_ack(hw);
 	if (err != 0)
 		device_printf(hw->dev, "A2 firmware reset timed out\n");
 	return (err);
@@ -253,13 +267,15 @@ aq2_fw_get_mac_addr(struct aq_hw *hw, uint8_t *mac)
 	return (0);
 }
 
-/* No fw_mtx: the IN window is written only from iflib-serialised paths. */
+/* fw_mtx: the IN window and the shared ack are one indivisible request. */
 static int
 aq2_fw_set_mode(struct aq_hw *hw, enum aq_hw_fw_mpi_state mode,
     enum aq_fw_link_speed speed)
 {
 	uint32_t v;
 	int err;
+
+	mtx_lock(&hw->fw_mtx);
 
 	v = AQ_READ_REG(hw, AQ2_FW_INTERFACE_IN_LINK_OPTIONS_REG);
 	v &= ~(AQ2_FW_INTERFACE_IN_LINK_OPTIONS_RATE_10G |
@@ -310,15 +326,16 @@ aq2_fw_set_mode(struct aq_hw *hw, enum aq_hw_fw_mpi_state mode,
 
 	/* Options acked before ACTIVE so bring-up negotiates the new mask. */
 	AQ_WRITE_REG(hw, AQ2_FW_INTERFACE_IN_LINK_OPTIONS_REG, v);
-	if (mode == MPI_INIT) {
-		err = aq2_fw_wait_shared_ack(hw);
-		if (err != 0)
-			return (err);
+	err = aq2_fw_wait_shared_ack(hw);
+	if (err == 0 && mode == MPI_INIT) {
 		AQ_WRITE_REG_BIT(hw, AQ2_FW_INTERFACE_IN_LINK_CONTROL_REG,
 		    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE, 0,
 		    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE_ACTIVE);
+		err = aq2_fw_wait_shared_ack(hw);
 	}
-	return (aq2_fw_wait_shared_ack(hw));
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
 }
 
 static int
@@ -606,6 +623,101 @@ aq2_fw_get_phy_hot_warning(struct aq_hw *hw, bool *hot)
 	return (0);
 }
 
+/* The F/W starts a run on a rising edge of the toggle bit, so drive both. */
+#define	AQ2_CABLE_DIAG_WAIT_SECS	10
+#define	AQ2_CABLE_DIAG_POLLS		120
+
+static int
+aq2_fw_cable_diag(struct aq_hw *hw, struct aq_hw_cable_diag *cd)
+{
+	uint32_t lane[AQ_CABLE_PAIRS];
+	uint32_t v, tid, tid0;
+	int err, i, timo;
+
+	tid0 = 0;
+
+	/*
+	 * One run at a time, and the request must reach the F/W as a whole:
+	 * this is the only IN-window writer iflib does not serialise.
+	 */
+	mtx_lock(&hw->fw_mtx);
+	if (hw->cable_diag_busy) {
+		mtx_unlock(&hw->fw_mtx);
+		return (EBUSY);
+	}
+	hw->cable_diag_busy = true;
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_REG, &v, sizeof(v));
+	if (err == 0) {
+		tid0 = v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_ID;
+
+		v = AQ_READ_REG(hw, AQ2_FW_INTERFACE_IN_CABLE_DIAG_REG);
+		v &= ~AQ2_FW_INTERFACE_IN_CABLE_DIAG_WAIT;
+		v |= AQ2_CABLE_DIAG_WAIT_SECS <<
+		    AQ2_FW_INTERFACE_IN_CABLE_DIAG_WAIT_S;
+
+		/* Land the bit low first: a run starts on the 0 -> 1 edge. */
+		v &= ~AQ2_FW_INTERFACE_IN_CABLE_DIAG_TOGGLE;
+		AQ_WRITE_REG(hw, AQ2_FW_INTERFACE_IN_CABLE_DIAG_REG, v);
+		err = aq2_fw_wait_shared_ack(hw);
+		if (err == 0) {
+			v |= AQ2_FW_INTERFACE_IN_CABLE_DIAG_TOGGLE;
+			AQ_WRITE_REG(hw,
+			    AQ2_FW_INTERFACE_IN_CABLE_DIAG_REG, v);
+			err = aq2_fw_wait_shared_ack(hw);
+		}
+	}
+	mtx_unlock(&hw->fw_mtx);
+	if (err != 0)
+		goto done;
+
+	/* Each completed run gets a fresh id, so a stale result cannot pass. */
+	for (timo = AQ2_CABLE_DIAG_POLLS; timo > 0; timo--) {
+		err = pause_sig("aqcdiag", hz / 4);
+		if (err == EINTR || err == ERESTART)
+			goto done;
+		err = aq2_fw_interface_buffer_read(hw,
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_REG, &v,
+		    sizeof(v));
+		if (err != 0)
+			goto done;
+		tid = v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_ID;
+		if (tid != tid0)
+			break;
+	}
+	if (timo == 0) {
+		trace_error(hw, dbg_fw, "aq2> cable diagnostic timed out");
+		err = ETIMEDOUT;
+		goto done;
+	}
+	cd->status = (v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_STATUS) >>
+	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_STATUS_S;
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_REG, lane, sizeof(lane));
+	if (err != 0)
+		goto done;
+
+	for (i = 0; i < AQ_CABLE_PAIRS; i++) {
+		cd->pair[i].result = lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_RESULT;
+		cd->pair[i].dist = (lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_DIST) >>
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_DIST_S;
+		cd->pair[i].far_dist = (lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_FAR_DIST) >>
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_FAR_DIST_S;
+	}
+
+done:
+	mtx_lock(&hw->fw_mtx);
+	hw->cable_diag_busy = false;
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
+}
+
 const struct aq_firmware_ops aq2_fw_ops = {
 	.reset = aq2_fw_reset,
 	.set_mode = aq2_fw_set_mode,
@@ -617,8 +729,11 @@ const struct aq_firmware_ops aq2_fw_ops = {
 	.get_temp = aq2_fw_get_temp,
 	.get_phy_fault = aq2_fw_get_phy_fault,
 	.get_phy_hot_warning = aq2_fw_get_phy_hot_warning,
+	.cable_diag = aq2_fw_cable_diag,
 	.phy_reset = NULL,	/* A2 clears thermal shutdown on its own reset */
 	.thermal_arm = NULL,	/* A2 firmware ships thermal shutdown armed */
 	.get_thermal_limit = aq2_fw_get_thermal_limit,
 	.led_control = NULL,
+	/* Unimplemented: an A2 fibre part reports no SFP module diagnostics. */
+	.get_module_eeprom = NULL,
 };

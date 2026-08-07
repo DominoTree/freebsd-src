@@ -128,6 +128,8 @@ struct aq_dev {
 	uint16_t          phy_fault_last;	/* last fault code reported */
 	bool              phy_hot_last;		/* last over-temperature warning */
 	bool              link_read_failed;	/* link state read is failing */
+	struct aq_hw_cable_diag cable_diag;	/* result of the last run */
+	bool              cable_diag_valid;	/* cable_diag has been filled */
 	enum aq_thermal_state {
 		AQ_THERMAL_NORMAL = 0,	/* no thermal shutdown pending */
 		AQ_THERMAL_COOLING,	/* shut down; waiting to cool */
