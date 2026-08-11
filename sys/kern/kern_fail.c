@@ -63,6 +63,7 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
 #include <sys/sleepqueue.h>
@@ -921,6 +922,7 @@ fail_point_sysctl_status(SYSCTL_HANDLER_ARGS)
 {
 	struct fail_point *fp;
 	struct sbuf sb, *sb_check;
+	bool verbose;
 
 	fp = arg1;
 
@@ -930,8 +932,10 @@ fail_point_sysctl_status(SYSCTL_HANDLER_ARGS)
 
 	sbuf_set_drain(&sb, (sbuf_drain_func *)fail_sysctl_drain_func, req);
 
+	verbose = priv_check(req->td, PRIV_KMEM_READ) == 0;
+
 	/* Retrieving. */
-	fail_point_get(fp, &sb, true);
+	fail_point_get(fp, &sb, verbose);
 
 	sbuf_finish(&sb);
 	sbuf_delete(&sb);
