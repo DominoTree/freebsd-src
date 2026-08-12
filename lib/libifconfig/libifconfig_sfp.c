@@ -724,7 +724,7 @@ sfp_id_string_alt(uint8_t value)
 
 	if (value <= SFF_8024_ID_LAST)
 		id = sff_8024_id[value];
-	else if (value > 0x80)
+	else if (value >= 0x80)
 		id = "Vendor specific";
 	else
 		id = "Reserved";
@@ -737,9 +737,9 @@ sfp_conn_string_alt(uint8_t value)
 {
 	const char *conn;
 
-	if (value >= 0x0D && value <= 0x1F)
+	if (value >= 0x0E && value <= 0x1F)
 		conn = "Unallocated";
-	else if (value >= 0x24 && value <= 0x7F)
+	else if (value >= 0x29 && value <= 0x7F)
 		conn = "Unallocated";
 	else
 		conn = "Vendor specific";
