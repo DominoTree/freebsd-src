@@ -502,7 +502,7 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
 /* Table 3.13 and 3.14 Temperature Conversion Values */
 #define SFF_8472_TEMP_SIGN (1 << 15)
 #define SFF_8472_TEMP_SHIFT  8
-#define SFF_8472_TEMP_MSK  0xEF00
+#define SFF_8472_TEMP_MSK  0x7F00
 #define SFF_8472_TEMP_FRAC 0x00FF
 
 /* Internal Callibration Conversion factors */
@@ -517,10 +517,11 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
 /*
  * Represented as a 16 bit unsigned integer with the current defined
  * as the full 16 bit value (0 – 65535) with LSB equal to 2 uA,
- * yielding a total range of 0 to 131 mA.
+ * yielding a total range of 0 to 131 mA.  Dividing by this factor
+ * yields milliamps.
  */
 
-#define SFF_8472_BIAS_FACTOR 2000.0 
+#define SFF_8472_BIAS_FACTOR 500.0
 
 /*
  * Represented as a 16 bit unsigned integer with the power defined as
