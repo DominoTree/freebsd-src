@@ -2910,7 +2910,7 @@ modinfo(int argc, const char *argv[])
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 			goto fail;
 		tx_bias = i2cd.data[0] << 8;
-		printf("TX Bias %fuA\n", tx_bias / SFF_8472_BIAS_FACTOR);
+		printf("TX Bias %fmA\n", tx_bias / SFF_8472_BIAS_FACTOR);
 
 		i2cd.offset = SFF_8472_TX_POWER;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
