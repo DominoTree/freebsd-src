@@ -140,10 +140,17 @@ ifconfig_sfp_id_is_cmis(enum sfp_id id)
 {
 	switch (id) {
 	case SFP_ID_QSFP_DD:
-	case SFP_ID_QSFP8X:
+	case SFP_ID_OSFP8X:
 	case SFP_ID_SFP_DD:
 	case SFP_ID_DSFP:
 	case SFP_ID_QSFP_CMIS:
+	case SFP_ID_SFP_DD_CMIS:
+	case SFP_ID_SFPPLUS_CMIS:
+	case SFP_ID_OSFP_XD:
+	case SFP_ID_ELSFP:
+	case SFP_ID_CDFP_X4_PCIE:
+	case SFP_ID_CDFP_X8_PCIE:
+	case SFP_ID_CDFP_X16_PCIE:
 		return (true);
 	default:
 		return (false);
@@ -218,7 +225,7 @@ size_t ifconfig_sfp_dump_region_count(const struct ifconfig_sfp_dump *dp);
 /** Convert channel power to milliwatts power
  * This is provided as a convenience for displaying channel power levels.
  * @see (struct ifconfig_sfp_status).channel
- * @param power	Power in 0.1 mW units
+ * @param power	Power in 0.1 uW units
  * @return	Power in milliwatts (mW)
  */
 double power_mW(uint16_t power);
@@ -226,7 +233,7 @@ double power_mW(uint16_t power);
 /** Convert channel power to decibel-milliwats power level
  * This is provided as a convenience for displaying channel power levels.
  * @see (struct ifconfig_sfp_status).channel
- * @param power	Power in 0.1 mW units
+ * @param power	Power in 0.1 uW units
  * @return	Power level in decibel-milliwatts (dBm)
  */
 
@@ -235,7 +242,7 @@ double power_dBm(uint16_t power);
 /** Convert channel bias current to milliamps
  * This is provided as a convenience for displaying channel bias currents.
  * @see (struct ifconfig_sfp_status).channel
- * @param bias	Bias current in 2 mA units
+ * @param bias	Bias current in 2 uA units
  * @return	Bias current in milliamps (mA)
  */
 double bias_mA(uint16_t bias);
