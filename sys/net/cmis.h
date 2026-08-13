@@ -6,7 +6,7 @@
 
 /*
  * The following set of constants are from the OIF Common Management
- * Interface Specification (CMIS) revision 5.3, September 2024.
+ * Interface Specification (CMIS) revision 5.4, May 2026.
  *
  * CMIS defines a 256-byte addressable memory with lower (0-127) and
  * upper (128-255) regions.  Lower memory is always accessible.
@@ -20,13 +20,6 @@
 #define	_NET_CMIS_H_
 
 #define	CMIS_BASE	0xA0	/* Base I2C address for all requests */
-
-/* CMIS Module Types (SFF-8024 Identifier, byte 0) */
-#define	CMIS_ID_QSFP_DD	0x18	/* QSFP-DD */
-#define	CMIS_ID_OSFP8X		0x19	/* OSFP 8X */
-#define	CMIS_ID_SFP_DD		0x1A	/* SFP-DD */
-#define	CMIS_ID_DSFP		0x1B	/* DSFP */
-#define	CMIS_ID_QSFP_CMIS	0x1E	/* QSFP+ with CMIS */
 
 /* Table 8-4: Lower Memory Map (bytes 0x00-0x7F) */
 enum {
@@ -93,7 +86,7 @@ enum {
 	/* Table 8-21: Media Type (byte 85) */
 	CMIS_MEDIA_TYPE		= 85,	/* MediaType encoding */
 
-	/* Table 8-23: Application Descriptors (bytes 86-117) */
+	/* Table 8-24: Application Descriptors (bytes 86-117) */
 	CMIS_APP_DESC_START	= 86,	/* First Application Descriptor */
 	CMIS_APP_DESC1		= 86,	/* AppDescriptor 1 (AppSel 1) */
 	CMIS_APP_DESC2		= 90,	/* AppDescriptor 2 (AppSel 2) */
@@ -104,11 +97,11 @@ enum {
 	CMIS_APP_DESC7		= 110,	/* AppDescriptor 7 (AppSel 7) */
 	CMIS_APP_DESC8		= 114,	/* AppDescriptor 8 (AppSel 8) */
 
-	/* Table 8-24: Password (bytes 118-125) */
+	/* Table 8-25: Password (bytes 118-125) */
 	CMIS_PASSWORD_CHANGE	= 118,	/* Password change entry (4 bytes) */
 	CMIS_PASSWORD_ENTRY	= 122,	/* Password entry area (4 bytes) */
 
-	/* Table 8-25: Page Mapping (bytes 126-127) */
+	/* Table 8-26: Page Mapping (bytes 126-127) */
 	CMIS_BANK_SEL		= 126,	/* Bank select */
 	CMIS_PAGE_SEL		= 127,	/* Page select */
 };
@@ -160,6 +153,7 @@ enum {
  */
 #define	CMIS_FLAG_CDB_COMPLETE2	(1 << 7) /* CdbCmdCompleteFlag2 */
 #define	CMIS_FLAG_CDB_COMPLETE1	(1 << 6) /* CdbCmdCompleteFlag1 */
+#define	CMIS_FLAG_ABNORMAL_FW	(1 << 3) /* AbnormalFwIndicationFlag */
 #define	CMIS_FLAG_DP_FW_ERROR	(1 << 2) /* DataPathFirmwareErrorFlag */
 #define	CMIS_FLAG_MOD_FW_ERROR	(1 << 1) /* ModuleFirmwareErrorFlag */
 #define	CMIS_FLAG_STATE_CHANGED	(1 << 0) /* ModuleStateChangedFlag */
@@ -230,8 +224,8 @@ enum {
 #define	CMIS_MEDIA_TYPE_UNDEF	0x00	/* Undefined */
 #define	CMIS_MEDIA_TYPE_MMF	0x01	/* Optical: MMF */
 #define	CMIS_MEDIA_TYPE_SMF	0x02	/* Optical: SMF */
-#define	CMIS_MEDIA_TYPE_COPPER	0x03	/* Passive/Active Copper */
-#define	CMIS_MEDIA_TYPE_ACTIVE	0x04	/* Active Cable */
+#define	CMIS_MEDIA_TYPE_COPPER	0x03	/* Passive and Linear Active Copper */
+#define	CMIS_MEDIA_TYPE_ACTIVE	0x04	/* Limiting and Retimed Active Cable */
 #define	CMIS_MEDIA_TYPE_BASET	0x05	/* BASE-T */
 
 /* Application Descriptor constants */
@@ -248,7 +242,7 @@ enum {
 #define	CMIS_APP_MEDIA_LANES_MASK	0x0F	/* MediaLaneCount, bits 3:0 */
 
 /*
- * Table 8-26: Page 00h - Administrative Information
+ * Table 8-27: Page 00h - Administrative Information
  * Accessed with page=0x00, bank=0.
  */
 enum {
@@ -274,47 +268,47 @@ enum {
 };
 
 /*
- * Table 8-82: Page 11h - Lane Status and Data Path Status
+ * Table 8-92: Page 11h - Lane Status and Data Path Status
  * Accessed with page=0x11, bank=0 (lanes 1-8).
  */
 enum {
-	/* Table 8-83: Data Path States (bytes 128-131) */
+	/* Table 8-93: Data Path States (bytes 128-131) */
 	CMIS_P11_DPSTATE_12		= 128,	/* DPState for host lanes 1-2 */
 	CMIS_P11_DPSTATE_34		= 129,	/* DPState for host lanes 3-4 */
 	CMIS_P11_DPSTATE_56		= 130,	/* DPState for host lanes 5-6 */
 	CMIS_P11_DPSTATE_78		= 131,	/* DPState for host lanes 7-8 */
 
-	/* Table 8-85: Lane Output Status (bytes 132-133) */
+	/* Table 8-95: Lane Output Status (bytes 132-133) */
 	CMIS_P11_OUTPUT_RX		= 132,	/* OutputStatusRx per lane */
 	CMIS_P11_OUTPUT_TX		= 133,	/* OutputStatusTx per lane */
 
-	/* Table 8-86: State Changed Flags (bytes 134-135) */
+	/* Table 8-96: State Changed Flags (byte 134) */
 	CMIS_P11_DPSTATE_CHGD		= 134,	/* DPStateChanged flags */
-	CMIS_P11_OUTPUT_CHGD_TX		= 135,	/* OutputStatusChangedTx flags*/
 
-	/* Table 8-87: Lane-Specific Tx Flags (bytes 136-141) */
-	CMIS_P11_TX_FAULT		= 136,	/* TxFault per lane */
-	CMIS_P11_TX_LOS			= 137,	/* TxLOS per lane */
-	CMIS_P11_TX_CDR_LOL		= 138,	/* TxCDRLOL per lane */
-	CMIS_P11_TX_ADPT_EQ_FAIL 	= 139,	/* TxAdaptEqFail per lane */
-	CMIS_P11_TX_PWR_HIGH_ALM 	= 140,	/* TxPowerHighAlarm per lane */
-	CMIS_P11_TX_PWR_LOW_ALM		= 141,	/* TxPowerLowAlarm per lane */
-	CMIS_P11_TX_BIAS_HIGH_ALM 	= 142,	/* TxBiasHighAlarm per lane */
-	CMIS_P11_TX_BIAS_LOW_ALM 	= 143,	/* TxBiasLowAlarm per lane */
-	CMIS_P11_TX_PWR_HIGH_WARN 	= 144,	/* TxPowerHighWarning per lane*/
-	CMIS_P11_TX_PWR_LOW_WARN 	= 145,	/* TxPowerLowWarning per lane */
-	CMIS_P11_TX_BIAS_HIGH_WARN 	= 146,	/* TxBiasHighWarning per lane */
-	CMIS_P11_TX_BIAS_LOW_WARN 	= 147,	/* TxBiasLowWarning per lane */
+	/* Table 8-97: Lane-Specific Tx Flags (bytes 135-146) */
+	CMIS_P11_TX_FAILURE		= 135,	/* FailureFlagTx per lane */
+	CMIS_P11_TX_LOS			= 136,	/* TxLOS per lane */
+	CMIS_P11_TX_CDR_LOL		= 137,	/* TxCDRLOL per lane */
+	CMIS_P11_TX_ADPT_EQ_FAIL 	= 138,	/* TxAdaptEqFail per lane */
+	CMIS_P11_TX_PWR_HIGH_ALM 	= 139,	/* TxPowerHighAlarm per lane */
+	CMIS_P11_TX_PWR_LOW_ALM		= 140,	/* TxPowerLowAlarm per lane */
+	CMIS_P11_TX_PWR_HIGH_WARN 	= 141,	/* TxPowerHighWarning per lane*/
+	CMIS_P11_TX_PWR_LOW_WARN 	= 142,	/* TxPowerLowWarning per lane */
+	CMIS_P11_TX_BIAS_HIGH_ALM 	= 143,	/* TxBiasHighAlarm per lane */
+	CMIS_P11_TX_BIAS_LOW_ALM 	= 144,	/* TxBiasLowAlarm per lane */
+	CMIS_P11_TX_BIAS_HIGH_WARN 	= 145,	/* TxBiasHighWarning per lane */
+	CMIS_P11_TX_BIAS_LOW_WARN 	= 146,	/* TxBiasLowWarning per lane */
 
-	/* Table 8-88: Rx Flags (bytes 148-153) */
-	CMIS_P11_RX_LOS			= 148,	/* RxLOS per lane */
-	CMIS_P11_RX_CDR_LOL		= 149,	/* RxCDRLOL per lane */
-	CMIS_P11_RX_PWR_HIGH_ALM 	= 150,	/* RxPowerHighAlarm per lane */
-	CMIS_P11_RX_PWR_LOW_ALM		= 151,	/* RxPowerLowAlarm per lane */
-	CMIS_P11_RX_PWR_HIGH_WARN 	= 152,	/* RxPowerHighWarning per lane*/
-	CMIS_P11_RX_PWR_LOW_WARN 	= 153,	/* RxPowerLowWarning per lane */
+	/* Table 8-98: Rx Flags (bytes 147-153) */
+	CMIS_P11_RX_LOS			= 147,	/* RxLOS per lane */
+	CMIS_P11_RX_CDR_LOL		= 148,	/* RxCDRLOL per lane */
+	CMIS_P11_RX_PWR_HIGH_ALM 	= 149,	/* RxPowerHighAlarm per lane */
+	CMIS_P11_RX_PWR_LOW_ALM		= 150,	/* RxPowerLowAlarm per lane */
+	CMIS_P11_RX_PWR_HIGH_WARN 	= 151,	/* RxPowerHighWarning per lane*/
+	CMIS_P11_RX_PWR_LOW_WARN 	= 152,	/* RxPowerLowWarning per lane */
+	CMIS_P11_OUTPUT_CHGD_RX		= 153,	/* OutputStatusChangedRx flags*/
 
-	/* Table 8-89: Lane-Specific Monitors (bytes 154-201) */
+	/* Table 8-99: Lane-Specific Monitors (bytes 154-201) */
 	CMIS_P11_TX_PWR_1		= 154,	/* U16 Tx optical pwr, lane 1 */
 	CMIS_P11_TX_PWR_2		= 156,	/* (0.1 uW increments) */
 	CMIS_P11_TX_PWR_3		= 158,
@@ -340,13 +334,13 @@ enum {
 	CMIS_P11_RX_PWR_7		= 198,
 	CMIS_P11_RX_PWR_8		= 200,
 
-	/* Table 8-90: Config Command Status (bytes 202-205) */
+	/* Table 8-100: Config Command Status (bytes 202-205) */
 	CMIS_P11_CONFIG_STAT_12		= 202,	/* ConfigStatus lanes 1-2 */
 	CMIS_P11_CONFIG_STAT_34		= 203,	/* ConfigStatus lanes 3-4 */
 	CMIS_P11_CONFIG_STAT_56		= 204,	/* ConfigStatus lanes 5-6 */
 	CMIS_P11_CONFIG_STAT_78		= 205,	/* ConfigStatus lanes 7-8 */
 
-	/* Table 8-93: Active Control Set (bytes 206-234) */
+	/* Table 8-103: Active Control Set (bytes 206-234) */
 	CMIS_P11_ACS_DPCONFIG1		= 206,	/* DPConfigLane1 (AppSel[7:4])*/
 	CMIS_P11_ACS_DPCONFIG2		= 207,	/* DPConfigLane2 */
 	CMIS_P11_ACS_DPCONFIG3		= 208,	/* DPConfigLane3 */
@@ -356,15 +350,15 @@ enum {
 	CMIS_P11_ACS_DPCONFIG7		= 212,	/* DPConfigLane7 */
 	CMIS_P11_ACS_DPCONFIG8		= 213,	/* DPConfigLane8 */
 	CMIS_P11_ACS_TX_START		= 214,	/* Provisioned Tx Controls */
-	CMIS_P11_ACS_TX_END		= 225,
-	CMIS_P11_ACS_RX_START		= 226,	/* Provisioned Rx Controls */
+	CMIS_P11_ACS_TX_END		= 221,
+	CMIS_P11_ACS_RX_START		= 222,	/* Provisioned Rx Controls */
 	CMIS_P11_ACS_RX_END		= 234,
 
-	/* Table 8-96: Data Path Conditions (bytes 235-239) */
+	/* Table 8-106: Data Path Conditions (bytes 235-239) */
 	CMIS_P11_DP_COND_START		= 235,
 	CMIS_P11_DP_COND_END		= 239,
 
-	/* Table 8-97: Media Lane Mapping (bytes 240-255) */
+	/* Table 8-107: Media Lane Mapping (bytes 240-255) */
 	CMIS_P11_MEDIA_MAP_START 	= 240,
 	CMIS_P11_MEDIA_MAP_END		= 255,
 };
@@ -383,7 +377,7 @@ enum {
 #define	CMIS_LANE1			(1 << 0)
 
 /*
- * DPState encoding within bytes 128-131 (Table 8-83).
+ * DPState encoding within bytes 128-131 (Table 8-93).
  * Each byte holds two 4-bit DPState fields:
  * bits 7:4 = even lane, bits 3:0 = odd lane.
  */
@@ -391,7 +385,7 @@ enum {
 #define	CMIS_DPSTATE_HI_SHIFT		4
 #define	CMIS_DPSTATE_LO_MASK		0x0F	/* Lower nibble (odd lane) */
 
-/* Table 8-84: Data Path State Encoding */
+/* Table 8-94: Data Path State Encoding */
 #define	CMIS_DPSTATE_DEACTIVATED	1	/* DPDeactivated (or unused) */
 #define	CMIS_DPSTATE_INIT		2	/* DPInit */
 #define	CMIS_DPSTATE_DEINIT		3	/* DPDeinit */
@@ -401,40 +395,48 @@ enum {
 #define	CMIS_DPSTATE_INITIALIZED 	7	/* DPInitialized */
 
 /*
- * ConfigStatus encoding within bytes 202-205 (Table 8-90/91).
+ * ConfigStatus encoding within bytes 202-205 (Table 8-100/101).
  * Each byte holds two 4-bit status fields, same nibble layout as DPState.
  */
-#define	CMIS_CFGSTAT_UNDEFINED		0x0	/* Undefined */
+#define	CMIS_CFGSTAT_UNDEFINED		0x0	/* ConfigUndefined */
 #define	CMIS_CFGSTAT_SUCCESS		0x1	/* ConfigSuccess */
 #define	CMIS_CFGSTAT_REJECTED		0x2	/* ConfigRejected */
-#define	CMIS_CFGSTAT_REJECTEDINV 	0x3	/* ConfigRejectedInvalidAppSel*/
-#define	CMIS_CFGSTAT_INPROGRESS		0x4	/* ConfigInProgress */
-#define	CMIS_CFGSTAT_REJECTEDLANE 	0x5	/* ConfigRejectedInvalidLane */
-#define	CMIS_CFGSTAT_REJECTEDEQ		0x6	/* ConfigRejectedInvalidEq */
+#define	CMIS_CFGSTAT_REJECTEDAPPSEL 	0x3	/* RejectedInvalidAppSel */
+#define	CMIS_CFGSTAT_REJECTEDDP		0x4	/* RejectedInvalidDataPath */
+#define	CMIS_CFGSTAT_REJECTEDSI		0x5	/* RejectedInvalidSI */
+#define	CMIS_CFGSTAT_REJECTEDINUSE 	0x6	/* RejectedLanesInUse */
+#define	CMIS_CFGSTAT_REJECTEDPARTIAL 	0x7	/* RejectedPartialDataPath */
+#define	CMIS_CFGSTAT_REJECTEDNOEMUL 	0x8	/* RejectedNoEmulation */
+#define	CMIS_CFGSTAT_INPROGRESS		0xC	/* ConfigInProgress */
 
-/* DPConfigLane (CMIS_P11_ACS_DPCONFIGn) bit definitions (Table 8-92/93) */
-#define	CMIS_ACS_APPSEL_MASK		0xF0	/* AppSel code, bits 7:4 */
+/* DPConfigLane (CMIS_P11_ACS_DPCONFIGn) bit definitions (Table 8-102/103) */
+#define	CMIS_ACS_APPSEL_MASK		0xF0	/* AppSelCode, bits 7:4 */
 #define	CMIS_ACS_APPSEL_SHIFT		4
-#define	CMIS_ACS_DATAPATH_MASK		0x0F	/* DataPathID, bits 3:0 */
+#define	CMIS_ACS_DPIDX_MASK		0x0E	/* DPIDX, bits 3:1 */
+#define	CMIS_ACS_DPIDX_SHIFT		1
+#define	CMIS_ACS_EXPLICIT_CTRL		0x01	/* ExplicitControl, bit 0 */
 
 /*
  * Page 00h bit definitions
  */
 
-/* Byte 200 (CMIS_P0_MOD_POWER) bit definitions (Table 8-31) */
+/*
+ * Byte 200 (CMIS_P0_MOD_POWER) bit definitions (Table 8-32).
+ * The power budget of each class is form factor specific; the worst case
+ * consumption is reported in MaxPower (byte 201) as multiples of 0.25 W.
+ */
 #define	CMIS_POWER_CLASS_MASK		0xE0	/* ModulePowerClass, bits 7:5 */
 #define	CMIS_POWER_CLASS_SHIFT		5
-#define	CMIS_POWER_CLASS_1		0	/* <=1.5W */
-#define	CMIS_POWER_CLASS_2		1	/* <=3.5W */
-#define	CMIS_POWER_CLASS_3		2	/* <=7.0W */
-#define	CMIS_POWER_CLASS_4		3	/* <=8.0W */
-#define	CMIS_POWER_CLASS_5		4	/* <=10.0W */
-#define	CMIS_POWER_CLASS_6		5	/* <=12.0W */
-#define	CMIS_POWER_CLASS_7		6	/* <=14.0W */
-#define	CMIS_POWER_CLASS_8		7	/* >14.0W, see MaxPower byte */
-#define	CMIS_POWER_MAX_IN_BYTE		(1 << 4) /* MaxPowerOverride: byte 201*/
+#define	CMIS_POWER_CLASS_1		0
+#define	CMIS_POWER_CLASS_2		1
+#define	CMIS_POWER_CLASS_3		2
+#define	CMIS_POWER_CLASS_4		3
+#define	CMIS_POWER_CLASS_5		4
+#define	CMIS_POWER_CLASS_6		5
+#define	CMIS_POWER_CLASS_7		6
+#define	CMIS_POWER_CLASS_8		7
 
-/* Byte 202 (CMIS_P0_CABLE_LEN) bit definitions (Table 8-32) */
+/* Byte 202 (CMIS_P0_CABLE_LEN) bit definitions (Table 8-33) */
 #define	CMIS_CABLE_LEN_MULT_MASK	0xC0	/* LengthMultiplier, bits 7:6 */
 #define	CMIS_CABLE_LEN_MULT_SHIFT	6
 #define	CMIS_CABLE_LEN_VAL_MASK		0x3F	/* Length value, bits 5:0 */
