@@ -2800,7 +2800,7 @@ modinfo(int argc, const char *argv[])
 	char string[16], *p;
 	struct t4_i2c_data i2cd;
 	int rc, i;
-	uint16_t temp, vcc, tx_bias, tx_power, rx_power;
+	uint16_t vcc, tx_bias, tx_power, rx_power;
 
 	if (argc < 1) {
 		warnx("must supply a port");
@@ -2891,14 +2891,7 @@ modinfo(int argc, const char *argv[])
 		i2cd.offset = SFF_8472_TEMP;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 			goto fail;
-		temp = i2cd.data[0] << 8;
-		printf("Temp: ");
-		if ((temp & SFF_8472_TEMP_SIGN) == SFF_8472_TEMP_SIGN)
-			printf("-");
-		else
-			printf("+");
-		printf("%dC\n", (temp & SFF_8472_TEMP_MSK) >>
-		    SFF_8472_TEMP_SHIFT);
+		printf("Temp: %+dC\n", (int8_t)i2cd.data[0]);
 
 		i2cd.offset = SFF_8472_VCC;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
