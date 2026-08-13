@@ -23,7 +23,7 @@
 
 /* CMIS Module Types (SFF-8024 Identifier, byte 0) */
 #define	CMIS_ID_QSFP_DD	0x18	/* QSFP-DD */
-#define	CMIS_ID_QSFP8X		0x19	/* QSFP 8X (OSFP) */
+#define	CMIS_ID_OSFP8X		0x19	/* OSFP 8X */
 #define	CMIS_ID_SFP_DD		0x1A	/* SFP-DD */
 #define	CMIS_ID_DSFP		0x1B	/* DSFP */
 #define	CMIS_ID_QSFP_CMIS	0x1E	/* QSFP+ with CMIS */
