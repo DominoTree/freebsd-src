@@ -29,6 +29,8 @@
 #ifndef _NET_SFF8472_H_
 #define _NET_SFF8472_H_
 
+#include <sys/types.h>
+
 /*
  * The following set of constants are from Document SFF-8472
  * "Diagnostic Monitoring Interface for Optical Transceivers" revision
@@ -482,6 +484,15 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
 	"CDFP(x16 PCIe)",
 	"XPO"
 };
+
+static inline const char *
+sff_8024_id_name(uint8_t id)
+{
+
+	if (id <= SFF_8024_ID_LAST)
+		return (sff_8024_id[id]);
+	return (id >= 0x80 ? "Vendor specific" : "Reserved");
+}
 #endif
 
 /* Keep compatibility with old definitions */
