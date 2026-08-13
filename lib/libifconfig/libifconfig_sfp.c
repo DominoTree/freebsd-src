@@ -718,21 +718,6 @@ ifconfig_sfp_free_sfp_status(struct ifconfig_sfp_status *ss)
 }
 
 static const char *
-sfp_id_string_alt(uint8_t value)
-{
-	const char *id;
-
-	if (value <= SFF_8024_ID_LAST)
-		id = sff_8024_id[value];
-	else if (value >= 0x80)
-		id = "Vendor specific";
-	else
-		id = "Reserved";
-
-	return (id);
-}
-
-static const char *
 sfp_conn_string_alt(uint8_t value)
 {
 	const char *conn;
@@ -753,7 +738,7 @@ ifconfig_sfp_get_sfp_info_strings(const struct ifconfig_sfp_info *sfp,
 {
 	get_sfp_info_strings(sfp, strings);
 	if (strings->sfp_id == NULL)
-		strings->sfp_id = sfp_id_string_alt(sfp->sfp_id);
+		strings->sfp_id = sff_8024_id_name(sfp->sfp_id);
 	if (strings->sfp_conn == NULL)
 		strings->sfp_conn = sfp_conn_string_alt(sfp->sfp_conn);
 	if (strings->sfp_rev == NULL)
