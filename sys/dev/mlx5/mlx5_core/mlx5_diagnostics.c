@@ -302,7 +302,7 @@ int
 mlx5_get_eeprom_info(struct mlx5_core_dev *dev, struct mlx5_eeprom *eeprom)
 {
 	u32 data = 0;
-	u32 id;
+	u8 id;
 	int size_read = 0;
 	int ret;
 
@@ -347,7 +347,7 @@ mlx5_get_eeprom_info(struct mlx5_core_dev *dev, struct mlx5_eeprom *eeprom)
 	default:
 		id = data & MLX5_EEPROM_IDENTIFIER_BYTE_MASK;
 		mlx5_core_err(dev, "Not recognized cable type = 0x%x(%s)\n", id,
-		    id <= SFF_8024_ID_LAST ? sff_8024_id[id] : "Unknown");
+		    sff_8024_id_name(id));
 		return (EINVAL);
 	}
 	return (0);
