@@ -2836,10 +2836,7 @@ modinfo(int argc, const char *argv[])
 	if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 		goto fail;
 
-	if (i2cd.data[0] > SFF_8472_ID_LAST)
-		printf("Unknown ID\n");
-	else
-		printf("ID: %s\n", sff_8472_id[i2cd.data[0]]);
+	printf("ID: %s\n", sff_8024_id_name(i2cd.data[0]));
 
 	bzero(&string, sizeof(string));
 	for (i = SFF_8472_VENDOR_START; i < SFF_8472_VENDOR_END; i++) {
