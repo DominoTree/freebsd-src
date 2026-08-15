@@ -168,6 +168,31 @@ struct aq_hw_link_info {
 	uint8_t state;
 };
 
+/* Per-pair time-domain reflectometry result; distances are whole metres. */
+#define	AQ_CABLE_PAIRS	4
+
+/* Crossover codes count forward from the reporting pair, not from pair A. */
+enum aq_cable_result {
+	AQ_CABLE_OK = 0,
+	AQ_CABLE_CROSSOVER_1 = 1,
+	AQ_CABLE_CROSSOVER_2 = 2,
+	AQ_CABLE_CROSSOVER_3 = 3,
+	AQ_CABLE_SHORT = 4,
+	AQ_CABLE_LOW_MISMATCH = 5,
+	AQ_CABLE_HIGH_MISMATCH = 6,
+	AQ_CABLE_OPEN = 7,
+};
+
+struct aq_hw_cable_pair {
+	uint8_t result;
+	uint8_t dist;
+	uint8_t far_dist;
+};
+
+struct aq_hw_cable_diag {
+	struct aq_hw_cable_pair pair[AQ_CABLE_PAIRS];
+};
+
 struct aq_hw {
 	void *aq_dev;
 	device_t dev;
