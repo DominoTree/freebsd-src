@@ -186,6 +186,10 @@ aq_thermal_poll(struct aq_dev *aq_dev)
 	uint16_t fault;
 	int temp_mc;
 
+	/* A cable diagnostic drops the link and owns the PHY while it runs. */
+	if (aq_dev->cable_diag_busy)
+		return;
+
 	switch (aq_dev->thermal_state) {
 	case AQ_THERMAL_NORMAL:
 		aq_thermal_report_hot(aq_dev);
@@ -290,7 +294,10 @@ aq_link_report_down(struct aq_dev *aq_dev)
 
 	sbuf_new(&sb, detail, sizeof(detail), SBUF_FIXEDLEN);
 
-	if (hw->fw_ops->get_phy_fault != NULL &&
+	/* A diagnostic takes the PHY off line, so its fault is not news. */
+	if (aq_dev->cable_diag_busy)
+		sbuf_cat(&sb, ", cable diagnostic running");
+	else if (hw->fw_ops->get_phy_fault != NULL &&
 	    hw->fw_ops->get_phy_fault(hw, &fault) == 0 && fault != 0)
 		sbuf_printf(&sb, ", PHY fault 0x%04x", fault);
 	if (hw->fw_ops->get_link_info != NULL &&
