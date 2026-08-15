@@ -871,6 +871,9 @@ aq_if_stop(if_ctx_t ctx)
 	softc = iflib_get_softc(ctx);
 	hw = &softc->hw;
 
+	/* The cage may be repopulated before the next start. */
+	aq_sfp_forget(softc);
+
 	/* disable interrupt */
 	aq_if_disable_intr(ctx);
 
