@@ -171,6 +171,33 @@ enum {
 	SFF_8472_RESERVED_END	= 255
 };
 
+/*
+ * Individual fields within the compatibility block spanning
+ * SFF_8472_TRANS_START to SFF_8472_TRANS_END.  Bit assignments below are
+ * from SFF-8472 rev 12.5a table 5-3.  Only the codes with an ifmedia
+ * equivalent are transcribed; the block also carries InfiniBand, ESCON,
+ * SONET and Fibre Channel codes.
+ */
+enum {
+	SFF_8472_TRANS_10G	= 3,  /* 10G Ethernet compliance */
+	SFF_8472_TRANS_1G	= 6,  /* Ethernet compliance */
+	SFF_8472_TRANS_CABLE	= 8,  /* SFP+ cable technology */
+};
+
+#define SFF_8472_10G_SR		(1 << 4)
+#define SFF_8472_10G_LR		(1 << 5)
+#define SFF_8472_10G_LRM	(1 << 6)
+#define SFF_8472_10G_ER		(1 << 7)
+
+#define SFF_8472_1G_SX		(1 << 0)
+#define SFF_8472_1G_LX		(1 << 1)
+#define SFF_8472_1G_CX		(1 << 2)
+#define SFF_8472_1G_T		(1 << 3)
+#define SFF_8472_100_FX		(1 << 5) /* same byte as the 1G codes */
+
+#define SFF_8472_CABLE_PASSIVE	(1 << 2)
+#define SFF_8472_CABLE_ACTIVE	(1 << 3)
+
 #define SFF_8472_DIAG_IMPL	(1 << 6) /* Required to be 1 */
 #define SFF_8472_DIAG_INTERNAL	(1 << 5) /* Internal measurements. */
 #define SFF_8472_DIAG_EXTERNAL	(1 << 4) /* External measurements. */

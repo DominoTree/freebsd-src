@@ -149,4 +149,13 @@ sff_8024_id_name(uint8_t id)
 }
 #endif
 
+/*
+ * Table 4-4 Extended Specification Compliance Codes.  The byte holding
+ * one is an enumerated value, not a bit field.  Only the two BASE-T
+ * codes are transcribed; they are the only place a BASE-T module
+ * identifies itself, as SFF-8472 table 5-3 has no BASE-T code.
+ */
+#define SFF_8024_EXT_10G_T_SFI	0x16 /* 10GBASE-T, SFI electrical interface */
+#define SFF_8024_EXT_10G_T_SR	0x1c /* 10GBASE-T Short Reach (30 m) */
+
 #endif /* !_NET_SFF8024_H_ */
