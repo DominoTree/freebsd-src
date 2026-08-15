@@ -94,6 +94,25 @@ The equivalent Atlantic 2 adapter reports nothing at all, which is easy to
 mistake for an empty or a faulty cage.
 Reads are refused on the twisted pair adapters, which have no cage to
 address.
+.Pp
+The media an SFP+ adapter reports follows the module actually fitted
+rather than the cage.
+Until a module has been read each speed goes by its medium-neutral host
+interface name, such as
+.Dq 10Gbase-SFI ,
+and once one has been read the speed is reported as
+.Dq 10Gbase-SR ,
+.Dq 10Gbase-LR ,
+.Dq 10Gbase-LRM ,
+.Dq 10GBase-ER ,
+.Dq 10Gbase-Twinax
+or
+.Dq 10Gbase-T
+as the module states, and correspondingly at the lower speeds.
+The advertised list holds every name each supported speed can go by, so
+a media selection made before a module is fitted keeps working after,
+and a speed with no pluggable equivalent, such as 5Gb, keeps its
+twisted pair name in a cage rather than becoming unselectable.
 .Sh SYSCTL VARIABLES
 The following read-only variables are available per interface as
 .Va dev.aq.%d.%s ,
