@@ -47,6 +47,7 @@ static int aq2_fw_get_link_counters(struct aq_hw *hw, uint32_t *up,
 static int aq2_fw_get_temp(struct aq_hw *hw, int *temp_mc);
 static int aq2_fw_get_thermal_limit(struct aq_hw *hw, int *limit_mc);
 static int aq2_fw_get_phy_hot_warning(struct aq_hw *hw, bool *hot);
+static int aq2_fw_cable_diag(struct aq_hw *hw, struct aq_hw_cable_diag *cd);
 
 /* Coherent OUT-window read, bracketed by the transaction id. */
 static int
@@ -207,6 +208,8 @@ aq2_fw_reset(struct aq_hw *hw)
 	uint32_t v;
 	int err;
 
+	mtx_lock(&hw->fw_mtx);
+
 	AQ_WRITE_REG_BIT(hw, AQ2_FW_INTERFACE_IN_LINK_CONTROL_REG,
 	    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE, 0,
 	    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE_ACTIVE);
@@ -228,6 +231,8 @@ aq2_fw_reset(struct aq_hw *hw)
 	    HW_ATL_B0_MTU_JUMBO, v);
 
 	err = aq2_fw_wait_shared_ack(hw);
+	mtx_unlock(&hw->fw_mtx);
+
 	if (err != 0)
 		device_printf(hw->dev, "A2 firmware reset timed out\n");
 	return (err);
@@ -253,13 +258,18 @@ aq2_fw_get_mac_addr(struct aq_hw *hw, uint8_t *mac)
 	return (0);
 }
 
-/* No fw_mtx: the IN window is written only from iflib-serialised paths. */
+/*
+ * fw_mtx covers the IN window and the shared-buffer ack together: the ack is
+ * a single doorbell, so an unserialised writer would consume another's.
+ */
 static int
 aq2_fw_set_mode(struct aq_hw *hw, enum aq_hw_fw_mpi_state mode,
     enum aq_fw_link_speed speed)
 {
 	uint32_t v;
 	int err;
+
+	mtx_lock(&hw->fw_mtx);
 
 	v = AQ_READ_REG(hw, AQ2_FW_INTERFACE_IN_LINK_OPTIONS_REG);
 	v &= ~(AQ2_FW_INTERFACE_IN_LINK_OPTIONS_RATE_10G |
@@ -313,12 +323,16 @@ aq2_fw_set_mode(struct aq_hw *hw, enum aq_hw_fw_mpi_state mode,
 	if (mode == MPI_INIT) {
 		err = aq2_fw_wait_shared_ack(hw);
 		if (err != 0)
-			return (err);
+			goto out;
 		AQ_WRITE_REG_BIT(hw, AQ2_FW_INTERFACE_IN_LINK_CONTROL_REG,
 		    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE, 0,
 		    AQ2_FW_INTERFACE_IN_LINK_CONTROL_MODE_ACTIVE);
 	}
-	return (aq2_fw_wait_shared_ack(hw));
+	err = aq2_fw_wait_shared_ack(hw);
+out:
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
 }
 
 static int
@@ -606,6 +620,110 @@ aq2_fw_get_phy_hot_warning(struct aq_hw *hw, bool *hot)
 	return (0);
 }
 
+/*
+ * A run starts on the toggle's rising edge, not on any change of it, and the
+ * firmware publishes each completed run under a fresh transaction id.  The
+ * IN window is driver-owned, so nothing clears the bit on our behalf: drive
+ * it low, then high, and lower it again once the run ends, leaving the next
+ * request's edge unambiguous however this one finished.  A falling edge
+ * starts nothing, so the extra writes cost only their acks.
+ */
+#define	AQ2_CABLE_DIAG_WAIT_SECS	10
+#define	AQ2_CABLE_DIAG_POLLS		120	/* at hz/4 each, thirty seconds */
+
+static void
+aq2_fw_cable_diag_arm(struct aq_hw *hw, bool run)
+{
+	uint32_t v;
+
+	v = AQ_READ_REG(hw, AQ2_FW_INTERFACE_IN_CABLE_DIAG_REG);
+	v &= ~(AQ2_FW_INTERFACE_IN_CABLE_DIAG_TOGGLE |
+	    AQ2_FW_INTERFACE_IN_CABLE_DIAG_WAIT);
+	v |= AQ2_CABLE_DIAG_WAIT_SECS <<
+	    AQ2_FW_INTERFACE_IN_CABLE_DIAG_WAIT_S;
+	if (run)
+		v |= AQ2_FW_INTERFACE_IN_CABLE_DIAG_TOGGLE;
+	AQ_WRITE_REG(hw, AQ2_FW_INTERFACE_IN_CABLE_DIAG_REG, v);
+}
+
+static int
+aq2_fw_cable_diag(struct aq_hw *hw, struct aq_hw_cable_diag *cd)
+{
+	uint32_t lane[AQ_CABLE_PAIRS];
+	uint32_t v, tid, tid0;
+	int err, i, timo;
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_REG, &v, sizeof(v));
+	if (err != 0)
+		return (err);
+	if ((v & AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_CABLE_DIAG) == 0)
+		return (ENOTSUP);
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_REG, &v, sizeof(v));
+	if (err != 0)
+		return (err);
+	tid0 = v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_ID;
+
+	mtx_lock(&hw->fw_mtx);
+	aq2_fw_cable_diag_arm(hw, false);
+	err = aq2_fw_wait_shared_ack(hw);
+	mtx_unlock(&hw->fw_mtx);
+	if (err != 0)
+		return (err);
+
+	mtx_lock(&hw->fw_mtx);
+	aq2_fw_cable_diag_arm(hw, true);
+	err = aq2_fw_wait_shared_ack(hw);
+	mtx_unlock(&hw->fw_mtx);
+	/* The edge may have landed even unacked, so lower it on the way out. */
+	if (err != 0)
+		goto done;
+
+	for (timo = AQ2_CABLE_DIAG_POLLS; timo > 0; timo--) {
+		pause("aqcdiag", hz / 4);
+		err = aq2_fw_interface_buffer_read(hw,
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_REG, &v,
+		    sizeof(v));
+		if (err != 0)
+			goto done;
+		tid = v & AQ2_FW_INTERFACE_OUT_CABLE_DIAG_TRANSACT_ID;
+		if (tid != tid0)
+			break;
+	}
+	if (timo == 0) {
+		trace_error(hw, dbg_fw, "aq2> cable diagnostic timed out");
+		err = ETIMEDOUT;
+		goto done;
+	}
+
+	err = aq2_fw_interface_buffer_read(hw,
+	    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_REG, lane, sizeof(lane));
+	if (err != 0)
+		goto done;
+
+	for (i = 0; i < AQ_CABLE_PAIRS; i++) {
+		cd->pair[i].result = lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_RESULT;
+		cd->pair[i].dist = (lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_DIST) >>
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_DIST_S;
+		cd->pair[i].far_dist = (lane[i] &
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_FAR_DIST) >>
+		    AQ2_FW_INTERFACE_OUT_CABLE_DIAG_FAR_DIST_S;
+	}
+
+done:
+	/* Lower the request whatever happened, so the next edge is real. */
+	mtx_lock(&hw->fw_mtx);
+	aq2_fw_cable_diag_arm(hw, false);
+	(void)aq2_fw_wait_shared_ack(hw);
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
+}
+
 const struct aq_firmware_ops aq2_fw_ops = {
 	.reset = aq2_fw_reset,
 	.set_mode = aq2_fw_set_mode,
@@ -617,8 +735,11 @@ const struct aq_firmware_ops aq2_fw_ops = {
 	.get_temp = aq2_fw_get_temp,
 	.get_phy_fault = aq2_fw_get_phy_fault,
 	.get_phy_hot_warning = aq2_fw_get_phy_hot_warning,
+	.cable_diag = aq2_fw_cable_diag,
 	.phy_reset = NULL,	/* A2 clears thermal shutdown on its own reset */
 	.thermal_arm = NULL,	/* A2 firmware ships thermal shutdown armed */
 	.get_thermal_limit = aq2_fw_get_thermal_limit,
 	.led_control = NULL,
+	/* Unimplemented: an A2 fibre part reports no SFP module diagnostics. */
+	.get_module_eeprom = NULL,
 };

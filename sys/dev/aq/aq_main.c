@@ -1460,6 +1460,109 @@ aq_sysctl_temperature(SYSCTL_HANDLER_ARGS)
 	return (sysctl_handle_int(oidp, &val, 0, req));
 }
 
+/*
+ * A crossover code names the offending pair relative to the one reporting it,
+ * so the same code means a different pair depending on where it came from.
+ */
+static void
+aq_cable_result_sbuf(struct sbuf *sb, int pair, uint8_t result)
+{
+
+	switch (result) {
+	case AQ_CABLE_OK:
+		sbuf_cat(sb, "ok");
+		return;
+	case AQ_CABLE_CROSSOVER_1:
+	case AQ_CABLE_CROSSOVER_2:
+	case AQ_CABLE_CROSSOVER_3:
+		sbuf_printf(sb, "crossover to pair %c",
+		    'A' + (pair + result) % AQ_CABLE_PAIRS);
+		return;
+	case AQ_CABLE_SHORT:
+		sbuf_cat(sb, "short");
+		return;
+	case AQ_CABLE_LOW_MISMATCH:
+		sbuf_cat(sb, "low impedance mismatch");
+		return;
+	case AQ_CABLE_HIGH_MISMATCH:
+		sbuf_cat(sb, "high impedance mismatch");
+		return;
+	case AQ_CABLE_OPEN:
+		sbuf_cat(sb, "open");
+		return;
+	}
+	sbuf_printf(sb, "unknown (%u)", result);
+}
+
+/*
+ * Reading reports the last run; writing starts a new one.  The test drives
+ * pulses down the pairs and drops an established link, so it must not run on
+ * a read -- that would fire on any sysctl walk of the tree.
+ */
+static int
+aq_sysctl_cable_diag(SYSCTL_HANDLER_ARGS)
+{
+	struct aq_dev   *softc = arg1;
+	struct aq_hw_cable_diag cd;
+	struct sbuf     *sb;
+	bool            valid;
+	int             error, i;
+
+	if (softc->hw.fw_ops == NULL || softc->hw.fw_ops->cable_diag == NULL)
+		return (ENOTSUP);
+
+	if (req->newptr != NULL) {
+		/*
+		 * One run at a time.  The sequence spans tens of seconds of
+		 * hardware state, so a second caller would drive the same
+		 * registers mid-run and both would decode the wrong result;
+		 * the admin task must not reset the PHY under it either.
+		 */
+		if (atomic_cmpset_int(&softc->cable_diag_busy, 0, 1) == 0)
+			return (EBUSY);
+		error = softc->hw.fw_ops->cable_diag(&softc->hw, &cd);
+		if (error == 0) {
+			mtx_lock(&softc->hw.fw_mtx);
+			softc->cable_diag = cd;
+			softc->cable_diag_valid = true;
+			mtx_unlock(&softc->hw.fw_mtx);
+		}
+		atomic_store_rel_int(&softc->cable_diag_busy, 0);
+		if (error != 0)
+			return (error);
+	}
+
+	/* Format from a snapshot: a concurrent run republishes as we read. */
+	mtx_lock(&softc->hw.fw_mtx);
+	cd = softc->cable_diag;
+	valid = softc->cable_diag_valid;
+	mtx_unlock(&softc->hw.fw_mtx);
+
+	sb = sbuf_new_for_sysctl(NULL, NULL, 256, req);
+	if (sb == NULL)
+		return (ENOMEM);
+
+	if (!valid)
+		sbuf_cat(sb, "not run; write to this node to start one");
+	else {
+		for (i = 0; i < AQ_CABLE_PAIRS; i++) {
+			struct aq_hw_cable_pair *p = &cd.pair[i];
+
+			sbuf_printf(sb, "\npair %c: ", 'A' + i);
+			aq_cable_result_sbuf(sb, i, p->result);
+			if (p->result != AQ_CABLE_OK)
+				sbuf_printf(sb, " at %u m (far end %u m)",
+				    p->dist, p->far_dist);
+		}
+		sbuf_cat(sb, "\n");
+	}
+
+	error = sbuf_finish(sb);
+	sbuf_delete(sb);
+
+	return (error);
+}
+
 /* arg2 selects the counter: 0 = link up, 1 = link down. */
 static int
 aq_sysctl_fw_link_counter(SYSCTL_HANDLER_ARGS)
@@ -1513,6 +1616,14 @@ aq_add_stats_sysctls(struct aq_dev *softc)
 		SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "temperature",
 		    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, softc, 0,
 		    aq_sysctl_temperature, "IK", "PHY temperature");
+
+	/* A cage has no twisted pairs to reflect off, whatever the F/W says. */
+	if (softc->media_type == AQ_MEDIA_TYPE_TP &&
+	    softc->hw.fw_ops != NULL && softc->hw.fw_ops->cable_diag != NULL)
+		SYSCTL_ADD_PROC(ctx, child, OID_AUTO, "cable_diag",
+		    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_MPSAFE, softc, 0,
+		    aq_sysctl_cable_diag, "A",
+		    "Cable diagnostic: write to run one, read for the result");
 
 	/* Only some firmware interface versions count link transitions. */
 	if (softc->hw.fw_ops != NULL &&

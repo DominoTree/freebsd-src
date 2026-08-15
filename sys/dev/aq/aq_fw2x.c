@@ -185,6 +185,9 @@ struct aq_fw2x_mailbox // struct fwHostInterface
 // Pluggable module SMBus proxy
 #define FW2X_CAP_SMBUS_READ (1ull << CAPS_LO_SMBUS_READ)
 
+// Cable diagnostic
+#define FW2X_CAP_CABLE_DIAG (1ull << (32 + CAPS_HI_CABLE_DIAG))
+
 
 #define FW2X_RATE_MASK  (FW2X_RATE_100M | FW2X_RATE_1G | FW2X_RATE_2G5 | FW2X_RATE_5G | FW2X_RATE_10G)
 #define FW2X_EEE_MASK  (FW2X_FW_CAP_EEE_100M | FW2X_FW_CAP_EEE_1G | FW2X_FW_CAP_EEE_2G5 | FW2X_FW_CAP_EEE_5G | FW2X_FW_CAP_EEE_10G)
@@ -797,6 +800,84 @@ aq_fw2x_get_thermal_limit(struct aq_hw* hw, int* limit_mc)
 	return (0);
 }
 
+/*
+ * Basic cable diagnostic.  1E.C470.F picks the normal routine over the
+ * extended one, .4 starts it and reads back set while it runs.  Status is
+ * three bits per pair in 1E.C800, pair A highest; the two reflection
+ * distances share one register per pair from 1E.C801 upwards, in metres.
+ */
+#define AQ_PHY_DIAG_PROV_REG	0xc470
+#define  AQ_PHY_DIAG_SELECT	0x8000		/* .F 0 = normal diagnostic */
+#define  AQ_PHY_DIAG_INITIATE	0x0010		/* .4 start, reads 1 while busy */
+#define AQ_PHY_CABLE_STATUS_REG	0xc800
+#define  AQ_PHY_CABLE_STATUS	0x0007
+#define AQ_PHY_CABLE_REFL_REG(n) (0xc801 + 2 * (n))
+
+#define AQ_CABLE_DIAG_POLLS	40		/* at hz/4 each, ten seconds */
+
+static int
+aq_fw2x_cable_diag(struct aq_hw* hw, struct aq_hw_cable_diag* cd)
+{
+	static const int status_shift[AQ_CABLE_PAIRS] = { 12, 8, 4, 0 };
+	uint16_t refl, v;
+	int err, i, timo;
+
+	if ((hw->fw_caps & FW2X_CAP_CABLE_DIAG) == 0)
+		return (ENOTSUP);
+
+	mtx_lock(&hw->fw_mtx);
+	aq_fw2x_phy_id_probe(hw);
+	err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL, AQ_PHY_DIAG_PROV_REG, &v);
+	if (err == 0 && v == 0xffff)
+		err = ENXIO;
+	/* .4 is self-clearing, so setting it again would start nothing. */
+	if (err == 0 && (v & AQ_PHY_DIAG_INITIATE) != 0)
+		err = EBUSY;
+	if (err == 0) {
+		v &= ~AQ_PHY_DIAG_SELECT;
+		v |= AQ_PHY_DIAG_INITIATE;
+		err = aq_fw2x_phy_write(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_DIAG_PROV_REG, v);
+	}
+	mtx_unlock(&hw->fw_mtx);
+	if (err != 0)
+		return (err);
+
+	/* The run outlasts any spin, so wait for it without holding fw_mtx. */
+	for (timo = AQ_CABLE_DIAG_POLLS; timo > 0; timo--) {
+		pause("aqcdiag", hz / 4);
+		mtx_lock(&hw->fw_mtx);
+		err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_DIAG_PROV_REG, &v);
+		mtx_unlock(&hw->fw_mtx);
+		if (err != 0)
+			return (err);
+		if ((v & AQ_PHY_DIAG_INITIATE) == 0)
+			break;
+	}
+	if (timo == 0) {
+		trace_error(hw, dbg_fw, "fw2x> cable diagnostic timed out");
+		return (ETIMEDOUT);
+	}
+
+	mtx_lock(&hw->fw_mtx);
+	err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL, AQ_PHY_CABLE_STATUS_REG,
+	    &v);
+	for (i = 0; err == 0 && i < AQ_CABLE_PAIRS; i++) {
+		err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_CABLE_REFL_REG(i), &refl);
+		if (err != 0)
+			break;
+		cd->pair[i].result = (v >> status_shift[i]) &
+		    AQ_PHY_CABLE_STATUS;
+		cd->pair[i].dist = refl >> 8;
+		cd->pair[i].far_dist = refl & 0xff;
+	}
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
+}
+
 static int
 aq_fw2x_led_control(struct aq_hw* hw, uint32_t onoff)
 {
@@ -828,6 +909,7 @@ const struct aq_firmware_ops aq_fw2x_ops =
 	.phy_reset = aq_fw2x_phy_reset,
 	.thermal_arm = aq_fw2x_thermal_arm,
 	.get_thermal_limit = aq_fw2x_get_thermal_limit,
+	.cable_diag = aq_fw2x_cable_diag,
 
 	.led_control = aq_fw2x_led_control,
 

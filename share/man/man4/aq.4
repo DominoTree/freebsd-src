@@ -3,7 +3,7 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd August 6, 2026
+.Dd August 15, 2026
 .Dt AQ 4
 .Os
 .Sh NAME
@@ -131,6 +131,34 @@ Comparing this against the transitions logged by the driver
 distinguishes a single link event from a flapping link.
 .El
 .Pp
+The following variable runs a cable diagnostic.
+It is present only on adapters that support one:
+.Bl -tag -width indent
+.It Va cable_diag
+Writing any value runs a time-domain reflectometry test and stores the
+result; reading reports the result of the last run.
+The test drives pulses down each of the four pairs, so it
+.Em interrupts an established link
+for ten to twenty seconds, counting renegotiation.
+That interruption is a genuine link state transition, not a cosmetic one:
+a
+.Xr carp 4
+master on the interface demotes and fails over, a
+.Xr lagg 4
+port leaves the aggregation and has to negotiate its way back in, and an
+.Xr if_bridge 4
+member goes down and up again.
+The link-down message names the diagnostic as the cause.
+Each pair is reported as
+.Dq ok ,
+.Dq short ,
+.Dq open ,
+a low or high impedance mismatch, or a crossover to another pair.
+A pair that is not
+.Dq ok
+also reports the approximate distance to the fault in metres.
+.El
+.Pp
 The following variables tune the driver's own tracing:
 .Bl -tag -width indent
 .It Va debug
@@ -144,5 +172,8 @@ All categories are enabled by default.
 .El
 .Sh SEE ALSO
 .Xr arp 4 ,
+.Xr carp 4 ,
+.Xr if_bridge 4 ,
+.Xr lagg 4 ,
 .Xr miibus 4 ,
 .Xr ifconfig 8
