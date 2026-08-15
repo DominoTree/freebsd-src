@@ -79,6 +79,21 @@ Marvell AQC115C (10Mb/100Mb/1Gb/2.5Gb RJ45)
 .It
 Marvell AQC116C (10Mb/100Mb/1Gb RJ45)
 .El
+.Sh PLUGGABLE MODULES
+On the SFP+ adapters
+.Nm
+reads the module's SFF-8472 memory over the firmware's SMBus proxy, so
+.Xr ifconfig 8
+.Fl v
+reports the module's type, vendor, part and serial number and date code,
+and, on a module that supports digital diagnostics, its temperature,
+supply voltage, laser bias current and optical power.
+.Pp
+Only the Atlantic 1 firmware carries that proxy.
+The equivalent Atlantic 2 adapter reports nothing at all, which is easy to
+mistake for an empty or a faulty cage.
+Reads are refused on the twisted pair adapters, which have no cage to
+address.
 .Sh SYSCTL VARIABLES
 The following read-only variables are available per interface as
 .Va dev.aq.%d.%s ,
