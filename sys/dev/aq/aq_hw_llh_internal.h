@@ -3324,6 +3324,23 @@
 #define mif_mcp_up_mailbox_execute_operation_msk 0x00008000u
 #define mif_mcp_up_mailbox_execute_operation_shift 15
 
+/* mif up mailbox write mode */
+#define mif_mcp_up_mailbox_write_mode_adr 0x00000200u
+#define mif_mcp_up_mailbox_write_mode_msk 0x00004000u
+#define mif_mcp_up_mailbox_write_mode_shift 14
+
+/* mcp up force interrupt */
+#define mcp_up_force_interrupt_adr 0x00000404u
+#define mcp_up_force_interrupt_msk 0x00000002u
+#define mcp_up_force_interrupt_shift 1
+
+/* revision B1 uP mailbox config-area write */
+#define mif_mcp_up_cfg_data_adr 0x00000328u
+#define mif_mcp_up_cfg_ctrl_adr 0x0000032cu
+#define mif_mcp_up_cfg_area_config 0x80000000u
+#define mif_mcp_up_cfg_area_msk 0xf0000000u
+#define mif_mcp_up_cfg_scratch_scp 0x0bu
+
 /*  MIF uP Mailbox Busy */
 #define mif_mcp_up_mailbox_busy_adr 0x00000200u
 #define mif_mcp_up_mailbox_busy_msk 0x00000100u

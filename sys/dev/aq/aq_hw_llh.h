@@ -1044,6 +1044,24 @@ void mif_mcp_up_mailbox_addr_set(struct aq_hw *hw, uint32_t value);
 
 /* get mif uP mailbox data */
 uint32_t mif_mcp_up_mailbox_data_get(struct aq_hw *aq_hw);
+/* set mif uP mailbox data */
+void mif_mcp_up_mailbox_data_set(struct aq_hw *hw, uint32_t value);
+
+/* start a mif uP mailbox write, both mode and execute in one write */
+void mif_mcp_up_mailbox_write_execute(struct aq_hw *hw);
+
+/* Start a mif uP mailbox read, clearing write mode in the same write. */
+void mif_mcp_up_mailbox_read_execute(struct aq_hw *hw);
+
+/* set mcp up force interrupt */
+void mcp_up_force_interrupt_set(struct aq_hw *hw, uint32_t value);
+
+/* set the revision B1 uP config-area write data register */
+void mif_mcp_up_cfg_data_set(struct aq_hw *hw, uint32_t value);
+/* select the revision B1 uP config-area byte offset to be written */
+void mif_mcp_up_cfg_ctrl_set(struct aq_hw *hw, uint32_t offset);
+/* has the uP consumed the revision B1 config-area write? */
+uint32_t mif_mcp_up_cfg_write_done_get(struct aq_hw *hw);
 
 /* clear ipv4 filter destination address */
 void hw_atl_rpfl3l4_ipv4_dest_addr_clear(struct aq_hw *aq_hw, uint8_t location);
