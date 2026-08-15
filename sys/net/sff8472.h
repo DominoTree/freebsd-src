@@ -29,7 +29,7 @@
 #ifndef _NET_SFF8472_H_
 #define _NET_SFF8472_H_
 
-#include <sys/types.h>
+#include <net/sff8024.h>
 
 /*
  * The following set of constants are from Document SFF-8472
@@ -388,112 +388,6 @@ enum {
  * device sets the bit low.
  */
 #define SFF_8472_STATUS_DATA_READY (1 << 0)
-
-/*
- * Table 5-1 Identifier values.
- * Identifier constants has taken from SFF-8024 rev 4.14 table 4-1
- * (as referenced by table 5-1 footer)
- * */
-enum {
-	SFF_8024_ID_UNKNOWN	= 0x0, /* Unknown or unspecified */
-	SFF_8024_ID_GBIC	= 0x1, /* GBIC */
-	SFF_8024_ID_SFF		= 0x2, /* Module soldered to motherboard (ex: SFF)*/
-	SFF_8024_ID_SFP		= 0x3, /* SFP or SFP “Plus” */
-	SFF_8024_ID_XBI		= 0x4, /* 300 pin XBI */
-	SFF_8024_ID_XENPAK	= 0x5, /* Xenpak */
-	SFF_8024_ID_XFP		= 0x6, /* XFP */
-	SFF_8024_ID_XFF		= 0x7, /* XFF */
-	SFF_8024_ID_XFPE	= 0x8, /* XFP-E */
-	SFF_8024_ID_XPAK	= 0x9, /* XPAk */
-	SFF_8024_ID_X2		= 0xA, /* X2 */
-	SFF_8024_ID_DWDM_SFP	= 0xB, /* DWDM-SFP */
-	SFF_8024_ID_QSFP	= 0xC, /* QSFP */
-	SFF_8024_ID_QSFPPLUS	= 0xD, /* QSFP+ or later */
-	SFF_8024_ID_CXP		= 0xE, /* CXP */
-	SFF_8024_ID_HD4X	= 0xF, /* Shielded Mini Multilane HD 4X */
-	SFF_8024_ID_HD8X	= 0x10, /* Shielded Mini Multilane HD 8X */
-	SFF_8024_ID_QSFP28	= 0x11, /* QSFP28 or later */
-	SFF_8024_ID_CXP2	= 0x12, /* CXP2 (aka CXP28) */
-	SFF_8024_ID_CDFP	= 0x13, /* CDFP (Style 1/Style 2) */
-	SFF_8024_ID_SMM4	= 0x14, /* Shielded Mini Multilate HD 4X Fanout */
-	SFF_8024_ID_SMM8	= 0x15, /* Shielded Mini Multilate HD 8X Fanout */
-	SFF_8024_ID_CDFP3	= 0x16, /* CDFP (Style3) */
-	SFF_8024_ID_MICROQSFP	= 0x17, /* microQSFP */
-	SFF_8024_ID_QSFP_DD	= 0x18, /* QSFP-DD 8X Pluggable Transceiver */
-	SFF_8024_ID_OSFP8X	= 0x19, /* OSFP 8X Pluggable Transceiver */
-	SFF_8024_ID_SFP_DD	= 0x1A, /* SFP-DD 2X Pluggable Transceiver */
-	SFF_8024_ID_DSFP	= 0x1B, /* DSFP Dual SFF Pluggable Transceiver */
-	SFF_8024_ID_X4ML	= 0x1C, /* x4 MiniLink/OcuLink */
-	SFF_8024_ID_X8ML	= 0x1D, /* x8 MiniLink */
-	SFF_8024_ID_QSFP_CMIS	= 0x1E, /* QSFP+ or later w/ Common Management
-					   Interface Specification */
-	SFF_8024_ID_SFP_DD_CMIS	= 0x1F, /* SFP-DD 2X Pluggable Transceiver
-					   w/ CMIS */
-	SFF_8024_ID_SFPPLUS_CMIS = 0x20, /* SFP+ or later w/ CMIS */
-	SFF_8024_ID_OSFP_XD	= 0x21, /* OSFP-XD w/ CMIS */
-	SFF_8024_ID_ELSFP	= 0x22, /* OIF-ELSFP w/ CMIS */
-	SFF_8024_ID_CDFP_X4_PCIE = 0x23, /* CDFP (x4 PCIe) SFF-TA-1032
-					    w/ CMIS */
-	SFF_8024_ID_CDFP_X8_PCIE = 0x24, /* CDFP (x8 PCIe) SFF-TA-1032
-					    w/ CMIS */
-	SFF_8024_ID_CDFP_X16_PCIE = 0x25, /* CDFP (x16 PCIe) SFF-TA-1032
-					     w/ CMIS */
-	SFF_8024_ID_XPO		= 0x26, /* XPO */
-	SFF_8024_ID_LAST	= SFF_8024_ID_XPO
-};
-
-#if defined(_WANT_SFF_8024_ID) || defined(_WANT_SFF_8472_ID)
-static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
-	"Unknown",
-	"GBIC",
-	"SFF",
-	"SFP/SFP+/SFP28",
-	"XBI",
-	"Xenpak",
-	"XFP",
-	"XFF",
-	"XFP-E",
-	"XPAK",
-	"X2",
-	"DWDM-SFP/SFP+",
-	"QSFP",
-	"QSFP+",
-	"CXP",
-	"HD4X",
-	"HD8X",
-	"QSFP28",
-	"CXP2",
-	"CDFP",
-	"SMM4",
-	"SMM8",
-	"CDFP3",
-	"microQSFP",
-	"QSFP-DD",
-	"OSFP8X",
-	"SFP-DD",
-	"DSFP",
-	"x4MiniLink/OcuLink",
-	"x8MiniLink",
-	"QSFP+(CMIS)",
-	"SFP-DD(CMIS)",
-	"SFP+(CMIS)",
-	"OSFP-XD",
-	"OIF-ELSFP",
-	"CDFP(x4 PCIe)",
-	"CDFP(x8 PCIe)",
-	"CDFP(x16 PCIe)",
-	"XPO"
-};
-
-static inline const char *
-sff_8024_id_name(uint8_t id)
-{
-
-	if (id <= SFF_8024_ID_LAST)
-		return (sff_8024_id[id]);
-	return (id >= 0x80 ? "Vendor specific" : "Reserved");
-}
-#endif
 
 /* Keep compatibility with old definitions */
 #define	SFF_8472_ID_UNKNOWN	SFF_8024_ID_UNKNOWN
