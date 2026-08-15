@@ -2015,6 +2015,61 @@ mif_mcp_up_mailbox_data_get(struct aq_hw *hw)
 	return AQ_READ_REG(hw, mif_mcp_up_mailbox_data_adr);
 }
 
+/* set mif uP mailbox data */
+void
+mif_mcp_up_mailbox_data_set(struct aq_hw *hw, uint32_t value)
+{
+	AQ_WRITE_REG(hw, mif_mcp_up_mailbox_data_adr, value);
+}
+
+/* start a mif uP mailbox write, both mode and execute in one write */
+void
+mif_mcp_up_mailbox_write_execute(struct aq_hw *hw)
+{
+	AQ_WRITE_REG(hw, mif_mcp_up_mailbox_execute_operation_adr,
+	    mif_mcp_up_mailbox_execute_operation_msk |
+	    mif_mcp_up_mailbox_write_mode_msk);
+}
+
+/* start a mif uP mailbox read; the same write clears write mode */
+void
+mif_mcp_up_mailbox_read_execute(struct aq_hw *hw)
+{
+	AQ_WRITE_REG(hw, mif_mcp_up_mailbox_execute_operation_adr,
+	    mif_mcp_up_mailbox_execute_operation_msk);
+}
+
+/* set mcp up force interrupt */
+void
+mcp_up_force_interrupt_set(struct aq_hw *hw, uint32_t value)
+{
+	AQ_WRITE_REG_BIT(hw, mcp_up_force_interrupt_adr,
+	    mcp_up_force_interrupt_msk, mcp_up_force_interrupt_shift, value);
+}
+
+/* set the revision B1 uP config-area write data register */
+void
+mif_mcp_up_cfg_data_set(struct aq_hw *hw, uint32_t value)
+{
+	AQ_WRITE_REG(hw, mif_mcp_up_cfg_data_adr, value);
+}
+
+/* select the revision B1 uP config-area byte offset to be written */
+void
+mif_mcp_up_cfg_ctrl_set(struct aq_hw *hw, uint32_t offset)
+{
+	AQ_WRITE_REG(hw, mif_mcp_up_cfg_ctrl_adr,
+	    mif_mcp_up_cfg_area_config | (0xffffu & offset));
+}
+
+/* the uP clears the config-area code from the scratchpad when a write lands */
+uint32_t
+mif_mcp_up_cfg_write_done_get(struct aq_hw *hw)
+{
+	return ((reg_glb_cpu_scratch_scp_get(hw, mif_mcp_up_cfg_scratch_scp) &
+	    mif_mcp_up_cfg_area_msk) != mif_mcp_up_cfg_area_config);
+}
+
 void
 hw_atl_rpfl3l4_ipv4_dest_addr_clear(struct aq_hw *aq_hw, uint8_t location)
 {

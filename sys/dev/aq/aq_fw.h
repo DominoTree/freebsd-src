@@ -93,6 +93,10 @@ struct aq_firmware_ops
 	int (*get_thermal_limit)(struct aq_hw* hw, int* limit_mc);
 
 	int (*led_control)(struct aq_hw* hw, uint32_t mode);
+
+	/* Reads the pluggable module EEPROM over the firmware SMBus proxy. */
+	int (*get_module_eeprom)(struct aq_hw* hw, uint8_t dev_addr,
+	    uint8_t offset, uint8_t len, uint8_t* data);
 };
 
 /* PHY global fault codes, register 1E.C850. */
