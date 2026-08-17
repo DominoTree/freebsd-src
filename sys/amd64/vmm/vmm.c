@@ -583,11 +583,20 @@ vm_assign_pptdev(struct vm *vm, int bus, int slot, int func)
 		if (vm->iommu == NULL)
 			return (ENXIO);
 		map = true;
+		error = vm_iommu_map(vm);
+		if (error != 0) {
+			iommu_destroy_domain(vm->iommu);
+			vm->iommu = NULL;
+			return (error);
+		}
 	}
 
 	error = ppt_assign_device(vm, bus, slot, func);
-	if (error == 0 && map)
-		error = vm_iommu_map(vm);
+	if (error != 0 && map) {
+		(void)vm_iommu_unmap(vm);
+		iommu_destroy_domain(vm->iommu);
+		vm->iommu = NULL;
+	}
 	return (error);
 }
 
