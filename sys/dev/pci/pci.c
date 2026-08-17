@@ -7014,6 +7014,39 @@ pcie_wait_for_pending_transactions(device_t dev, u_int max_delay)
 }
 
 /*
+ * Wait for a function to answer configuration requests again after a
+ * reset.  A function that has not completed its reset is permitted to
+ * return all ones instead, and every register then reads as set.
+ *
+ * The maximum delay is specified in milliseconds in max_delay.  Note
+ * that this function may sleep.
+ *
+ * Returns true once the function answers and false if the timeout is
+ * exceeded.
+ */
+static bool
+pci_wait_for_ready(device_t dev, u_int max_delay)
+{
+
+	while (pci_read_config(dev, PCIR_VENDOR, 2) == PCIV_INVALID) {
+		if (max_delay == 0)
+			return (false);
+
+		/* Poll once every 10 milliseconds up to the timeout. */
+		if (max_delay > 10) {
+			pause_sbt("pcirdy", 10 * SBT_1MS, 0, C_HARDCLOCK);
+			max_delay -= 10;
+		} else {
+			pause_sbt("pcirdy", max_delay * SBT_1MS, 0,
+			    C_HARDCLOCK);
+			max_delay = 0;
+		}
+	}
+
+	return (true);
+}
+
+/*
  * Determine the maximum Completion Timeout in microseconds.
  *
  * For non-PCI-express functions this returns 0.
@@ -7159,6 +7192,11 @@ pcie_flr_supported(device_t dev)
  * responsible for saving and restoring any registers including
  * PCI-standard registers via pci_save_state() and
  * pci_restore_state().
+ *
+ * Before returning, the function is given a further second to answer
+ * configuration requests again, so that the caller can restore its
+ * state.  A function that stays silent for longer is reported and the
+ * reset still counts as performed.
  */
 bool
 pcie_flr(device_t dev, u_int max_delay, bool force)
@@ -7209,6 +7247,13 @@ pcie_flr(device_t dev, u_int max_delay, bool force)
 
 	/* Wait for 100ms. */
 	pause_sbt("pcieflr", (100 + compl_delay) * SBT_1MS, 0, C_HARDCLOCK);
+
+	/* Reading status before the reset completes reports a false pending. */
+	if (!pci_wait_for_ready(dev, 1000)) {
+		pci_printf(&dinfo->cfg, "No response %d ms after FLR\n",
+		    1100 + compl_delay);
+		return (true);
+	}
 
 	if (pci_read_config(dev, cap + PCIER_DEVICE_STA, 2) &
 	    PCIEM_STA_TRANSACTION_PND)
