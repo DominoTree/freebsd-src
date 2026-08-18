@@ -129,6 +129,24 @@ CODE {
 	{
 		return (ENOTSUP);
 	}
+
+	static int
+	null_rss_key_op(if_ctx_t _ctx __unused, struct ifrsskey *_ifrk __unused)
+	{
+		return (ENOTSUP);
+	}
+
+	static int
+	null_rss_hash_get(if_ctx_t _ctx __unused, struct ifrsshash *_ifrh __unused)
+	{
+		return (ENOTSUP);
+	}
+
+	static int
+	null_rss_table_op(if_ctx_t _ctx __unused, struct ifrsstable *_ifrt __unused)
+	{
+		return (ENOTSUP);
+	}
 };
 
 #
@@ -385,3 +403,28 @@ METHOD int get_downreason {
 	if_ctx_t _ctx;
 	struct ifdownreason *_ifdr;
 } DEFAULT null_get_downreason;
+
+METHOD int rss_key_get {
+	if_ctx_t _ctx;
+	struct ifrsskey *_ifrk;
+} DEFAULT null_rss_key_op;
+
+METHOD int rss_key_set {
+	if_ctx_t _ctx;
+	struct ifrsskey *_ifrk;
+} DEFAULT null_rss_key_op;
+
+METHOD int rss_hash_get {
+	if_ctx_t _ctx;
+	struct ifrsshash *_ifrh;
+} DEFAULT null_rss_hash_get;
+
+METHOD int rss_table_get {
+	if_ctx_t _ctx;
+	struct ifrsstable *_ifrt;
+} DEFAULT null_rss_table_op;
+
+METHOD int rss_table_set {
+	if_ctx_t _ctx;
+	struct ifrsstable *_ifrt;
+} DEFAULT null_rss_table_op;

@@ -4520,6 +4520,25 @@ iflib_if_qflush(if_t ifp)
 		    IFCAP_VLAN_HWTSO | IFCAP_VLAN_HWCSUM | IFCAP_MEXTPG)
 
 static int
+iflib_rss_table_check(if_ctx_t ctx, struct ifrsstable *ifrt)
+{
+	if_softc_ctx_t scctx = &ctx->ifc_softc_ctx;
+	uint16_t i;
+
+	if (ifrt->ifrt_nentries != scctx->isc_rss_table_size)
+		return (EINVAL);
+	for (i = 0; i < ifrt->ifrt_nentries; i++) {
+		if (ifrt->ifrt_table[i] >= scctx->isc_nrxqsets)
+			return (EINVAL);
+	}
+
+	memset(&ifrt->ifrt_table[ifrt->ifrt_nentries], 0,
+	    sizeof(ifrt->ifrt_table) -
+	    ifrt->ifrt_nentries * sizeof(ifrt->ifrt_table[0]));
+	return (0);
+}
+
+static int
 iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 {
 	if_ctx_t ctx = if_getsoftc(ifp);
@@ -4707,6 +4726,84 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 		err = IFDI_GET_DOWNREASON(ctx, (struct ifdownreason *)data);
 		CTX_UNLOCK(ctx);
 		break;
+	case SIOCGIFRSSKEY:
+	{
+		struct ifrsskey *ifrk = (struct ifrsskey *)data;
+
+		memset(&ifrk->ifrk_func, 0, sizeof(*ifrk) -
+		    __offsetof(struct ifrsskey, ifrk_func));
+		CTX_LOCK(ctx);
+		err = IFDI_RSS_KEY_GET(ctx, ifrk);
+		CTX_UNLOCK(ctx);
+		if (err == 0 && ifrk->ifrk_keylen > sizeof(ifrk->ifrk_key))
+			err = EINVAL;
+		break;
+	}
+	case SIOCSIFRSSKEY:
+	{
+		struct ifrsskey *ifrk = (struct ifrsskey *)data;
+
+		if (ifrk->ifrk_func != RSS_FUNC_TOEPLITZ ||
+		    ifrk->ifrk_spare0 != 0 ||
+		    ifrk->ifrk_keylen == 0 ||
+		    ifrk->ifrk_keylen > sizeof(ifrk->ifrk_key)) {
+			err = EINVAL;
+			break;
+		}
+		memset(&ifrk->ifrk_key[ifrk->ifrk_keylen], 0,
+		    sizeof(ifrk->ifrk_key) - ifrk->ifrk_keylen);
+		CTX_LOCK(ctx);
+		err = IFDI_RSS_KEY_SET(ctx, ifrk);
+		CTX_UNLOCK(ctx);
+		break;
+	}
+	case SIOCGIFRSSHASH:
+	{
+		struct ifrsshash *ifrh = (struct ifrsshash *)data;
+
+		memset(&ifrh->ifrh_func, 0, sizeof(*ifrh) -
+		    __offsetof(struct ifrsshash, ifrh_func));
+		CTX_LOCK(ctx);
+		err = IFDI_RSS_HASH_GET(ctx, ifrh);
+		CTX_UNLOCK(ctx);
+		break;
+	}
+	case SIOCGIFRSSTABLE:
+	{
+		struct ifrsstable *ifrt = (struct ifrsstable *)data;
+		if_softc_ctx_t scctx = &ctx->ifc_softc_ctx;
+
+		if (scctx->isc_rss_table_size > RSS_TABLELEN) {
+			err = EMSGSIZE;
+			break;
+		}
+		memset(&ifrt->ifrt_nentries, 0, sizeof(*ifrt) -
+		    __offsetof(struct ifrsstable, ifrt_nentries));
+		CTX_LOCK(ctx);
+		err = IFDI_RSS_TABLE_GET(ctx, ifrt);
+		CTX_UNLOCK(ctx);
+		if (err == 0 && ifrt->ifrt_nentries != scctx->isc_rss_table_size)
+			err = EINVAL;
+		if (err == 0)
+			ifrt->ifrt_nqueues = scctx->isc_nrxqsets;
+		break;
+	}
+	case SIOCSIFRSSTABLE:
+	{
+		struct ifrsstable *ifrt = (struct ifrsstable *)data;
+
+		if (ctx->ifc_softc_ctx.isc_rss_table_size > RSS_TABLELEN) {
+			err = EMSGSIZE;
+			break;
+		}
+		err = iflib_rss_table_check(ctx, ifrt);
+		if (err != 0)
+			break;
+		CTX_LOCK(ctx);
+		err = IFDI_RSS_TABLE_SET(ctx, ifrt);
+		CTX_UNLOCK(ctx);
+		break;
+	}
 	default:
 		err = ether_ioctl(ifp, command, data);
 		break;
