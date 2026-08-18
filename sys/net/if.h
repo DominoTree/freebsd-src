@@ -650,6 +650,19 @@ struct ifrsshash {
 	uint32_t	ifrh_types;		/* RSS_TYPE_ */
 };
 
+/*
+ * RSS indirection table.
+ */
+
+#define	RSS_TABLELEN		512
+
+struct ifrsstable {
+	char		ifrt_name[IFNAMSIZ];	/* if name, e.g. "en0" */
+	uint16_t	ifrt_nentries;		/* entries used in ifrt_table */
+	uint16_t	ifrt_nqueues;		/* RX queues the table uses */
+	uint16_t	ifrt_table[RSS_TABLELEN];
+};
+
 #define	IFNET_PCP_NONE	0xff	/* PCP disabled */
 
 #define	IFDR_MSG_SIZE		64
