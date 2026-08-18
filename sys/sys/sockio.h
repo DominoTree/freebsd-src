@@ -152,4 +152,10 @@
 #define	SIOCSUMBPARAM	 _IOW('i', 158, struct ifreq)	/* set MBIM param */
 #define	SIOCGUMBPARAM	_IOWR('i', 159, struct ifreq)	/* get MBIM param */
 
+#define	SIOCGIFRSSTABLE	_IOWR('i', 163, struct ifrsstable) /* get the RSS
+							     indirection table */
+#define	SIOCSIFRSSTABLE	 _IOW('i', 164, struct ifrsstable) /* set the RSS
+							     indirection table */
+#define	SIOCSIFRSSKEY	 _IOW('i', 165, struct ifrsskey)  /* set RSS key */
+
 #endif /* !_SYS_SOCKIO_H_ */

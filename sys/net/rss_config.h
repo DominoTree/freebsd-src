@@ -130,6 +130,7 @@ int	rss_m2bucket(struct mbuf *m, uint32_t *bucket_id);
 void	rss_getkey(uint8_t *key);
 u_int	rss_gethashalgo(void);
 u_int	rss_gethashconfig(void);
+uint32_t	rss_hashconfig_to_iftypes(u_int hashconfig);
 /*
  * Hash calculation functions.
  */
