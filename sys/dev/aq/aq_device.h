@@ -155,6 +155,7 @@ struct aq_dev {
 
 	uint8_t			rss_key[HW_ATL_RSS_HASHKEY_SIZE];
 	uint8_t			rss_table[HW_ATL_RSS_INDIRECTION_TABLE_MAX];
+	bool			rss_seeded;	/* rss_key/rss_table are real */
 
 	int			dbg_level;
 	uint32_t		dbg_categories;
