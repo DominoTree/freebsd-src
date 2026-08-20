@@ -174,6 +174,7 @@ typedef	__uintptr_t	uintptr_t;
 #define	SO_TS_CLOCK	0x1017		/* int; clock type used for SO_TIMESTAMP */
 #define	SO_MAX_PACING_RATE	0x1018	/* uint32_t; socket's max TX pacing rate (Linux name) */
 #define	SO_DOMAIN	0x1019		/* int; get socket domain */
+#define	SO_REUSEPORT_LB_CPU	0x101a	/* int; SO_REUSEPORT_LB receive-CPU affinity */
 #define	SO_SPLICE	0x1023		/* struct splice; splice data to other socket */
 #endif
 
@@ -184,6 +185,10 @@ typedef	__uintptr_t	uintptr_t;
 #define	SO_TS_MONOTONIC		3	/* nanosecond resolution, monotonic */
 #define	SO_TS_DEFAULT		SO_TS_REALTIME_MICRO
 #define	SO_TS_CLOCK_MAX		SO_TS_MONOTONIC
+
+/* Special values for SO_REUSEPORT_LB_CPU. */
+#define	SO_REUSEPORT_LB_CPU_ANY		(-1)	/* clear receive-CPU affinity */
+#define	SO_REUSEPORT_LB_CPU_CURRENT	(-2)	/* affinitize to calling CPU */
 #endif
 
 /*

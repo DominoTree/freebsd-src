@@ -1124,6 +1124,16 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 					inp->inp_inc.inc_fibnum = optval;
 				INP_WUNLOCK(inp);
 				break;
+			case SO_REUSEPORT_LB_CPU:
+				error = sooptcopyin(sopt, &optval,
+				    sizeof(optval), sizeof(optval));
+				if (error != 0)
+					break;
+
+				INP_WLOCK(inp);
+				error = in_pcblbgroup_cpu(inp, optval);
+				INP_WUNLOCK(inp);
+				break;
 			case SO_MAX_PACING_RATE:
 #ifdef RATELIMIT
 				INP_WLOCK(inp);
@@ -1133,6 +1143,19 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 #else
 				error = EOPNOTSUPP;
 #endif
+				break;
+			default:
+				break;
+			}
+		} else if (sopt->sopt_level == SOL_SOCKET &&
+		    sopt->sopt_dir == SOPT_GET) {
+			switch (sopt->sopt_name) {
+			case SO_REUSEPORT_LB_CPU:
+				INP_RLOCK(inp);
+				optval = inp->inp_lb_cpu;
+				INP_RUNLOCK(inp);
+				error = sooptcopyout(sopt, &optval,
+				    sizeof(optval));
 				break;
 			default:
 				break;
