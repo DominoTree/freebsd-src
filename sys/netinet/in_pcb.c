@@ -332,6 +332,8 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		grp->il_pendcnt++;
 	} else {
 		grp->il_inp[grp->il_inpcnt] = inp;
+		if (inp->inp_lb_cpu != NOCPU)
+			grp->il_cpucnt++;
 
 		/*
 		 * Synchronize with in_pcblookup_lbgroup(): make sure that we
@@ -365,6 +367,7 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
 	for (i = 0; i < old_grp->il_inpcnt; ++i)
 		grp->il_inp[i] = old_grp->il_inp[i];
 	grp->il_inpcnt = old_grp->il_inpcnt;
+	grp->il_cpucnt = old_grp->il_cpucnt;
 	CK_LIST_INSERT_HEAD(&bucket->head, grp, il_list);
 	LIST_SWAP(&old_grp->il_pending, &grp->il_pending, inpcb,
 	    inp_lbgroup_list);
@@ -475,6 +478,8 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 			if (grp->il_inp[i] != inp)
 				continue;
 
+			if (inp->inp_lb_cpu != NOCPU)
+				grp->il_cpucnt--;
 			if (grp->il_inpcnt == 1 &&
 			    LIST_EMPTY(&grp->il_pending)) {
 				/* We are the last, free this local group. */
@@ -533,6 +538,50 @@ in_pcblbgroup_numa(struct inpcb *inp, int arg)
 	/* Add it to the new group based on numa domain. */
 	in_pcbinslbgrouphash(inp, numa_domain);
 
+	return (0);
+}
+
+int
+in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
+{
+	struct lbgroupbucket *bucket;
+	struct inpcblbgroup *grp;
+	int old;
+	u_int i;
+
+	INP_WLOCK_ASSERT(inp);
+
+	switch (cpu) {
+	case SO_REUSEPORT_LB_CPU_ANY:
+		cpu = NOCPU;
+		break;
+	case SO_REUSEPORT_LB_CPU_CURRENT:
+		cpu = curcpu;
+		break;
+	default:
+		if (cpu < 0 || cpu > mp_maxid || CPU_ABSENT(cpu))
+			return (EINVAL);
+	}
+
+	old = inp->inp_lb_cpu;
+	inp->inp_lb_cpu = cpu;
+
+	if ((inp->inp_flags & INP_INLBGROUP) == 0)
+		return (0);
+
+	grp = in_pcblbgroup_find(inp, &bucket);
+	if (grp == NULL)
+		return (0);
+	for (i = 0; i < grp->il_inpcnt; i++) {
+		if (grp->il_inp[i] != inp)
+			continue;
+		if (old == NOCPU && cpu != NOCPU)
+			grp->il_cpucnt++;
+		else if (old != NOCPU && cpu == NOCPU)
+			grp->il_cpucnt--;
+		break;
+	}
+	INPBUCKET_UNLOCK(bucket);
 	return (0);
 }
 
@@ -655,6 +704,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo)
 #ifdef NUMA
 	inp->inp_numa_domain = M_NODOM;
 #endif
+	inp->inp_lb_cpu = NOCPU;
 	inp->inp_pcbinfo = pcbinfo;
 	inp->inp_socket = so;
 	inp->inp_cred = crhold(so->so_cred);
@@ -2286,6 +2336,15 @@ out:
 	count = atomic_load_acq_int(&grp->il_inpcnt);
 	if (count == 0)
 		return (NULL);
+	if (grp->il_cpucnt > 0) {
+		int cpu = curcpu;
+
+		for (u_int i = 0; i < count; i++) {
+			inp = grp->il_inp[i];
+			if (inp != NULL && inp->inp_lb_cpu == cpu)
+				return (inp);
+		}
+	}
 	inp = grp->il_inp[INP_PCBLBGROUP_PKTHASH(faddr, lport, fport) % count];
 	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
 	return (inp);
