@@ -153,6 +153,7 @@ struct inpcblbgroup {
 	uint32_t	il_inpsiz; /* max count in il_inp[] (h) */
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
+	uint32_t	il_cpucnt;  /* cur il_inp[] with CPU affinity (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
 
