@@ -1003,6 +1003,16 @@ out:
 	count = atomic_load_acq_int(&grp->il_inpcnt);
 	if (count == 0)
 		return (NULL);
+	if (atomic_load_acq_int(&grp->il_cpucnt) > 0) {
+		int cpu = curcpu;
+
+		for (u_int i = 0; i < count; i++) {
+			inp = grp->il_inp[i];
+			if (inp != NULL &&
+			    atomic_load_int(&inp->inp_lb_cpu) == cpu)
+				return (inp);
+		}
+	}
 	inp = grp->il_inp[INP6_PCBLBGROUP_PKTHASH(faddr, lport, fport) % count];
 	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
 	return (inp);

@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd June 3, 2026
+.Dd August 20, 2026
 .Dt GETSOCKOPT 2
 .Os
 .Sh NAME
@@ -150,6 +150,7 @@ and set with
 .It Dv SO_REUSEADDR Ta "enables local address reuse"
 .It Dv SO_REUSEPORT Ta "enables duplicate address and port bindings"
 .It Dv SO_REUSEPORT_LB Ta "enables duplicate address and port bindings with load balancing"
+.It Dv SO_REUSEPORT_LB_CPU Ta "get or set receive-CPU affinity within a load-balancing group"
 .It Dv SO_KEEPALIVE Ta "enables keep connections alive"
 .It Dv SO_DONTROUTE Ta "enables routing bypass for outgoing messages"
 .It Dv SO_LINGER  Ta "linger on close if data present"
@@ -225,6 +226,31 @@ A maximum of 256 sockets can be bound to the same load-balancing group.
 sockets may also be bound to a group, see the
 .Xr divert 4
 manual page for details.
+.Pp
+.Dv SO_REUSEPORT_LB_CPU
+sets a receive-CPU affinity on a socket that is a member of a
+.Dv SO_REUSEPORT_LB
+group.
+The argument is an integer CPU id.
+When an incoming TCP or UDP packet is processed on that CPU, the group
+delivers it to this socket in preference to selecting a member with the
+hash function.
+An application that pins each worker thread to a distinct CPU can thereby
+receive the flows that the network stack, following the receive-side
+scaling steering performed by the hardware, processes on the same CPU.
+The special value
+.Dv SO_REUSEPORT_LB_CPU_CURRENT
+affinitizes the socket to the CPU of the calling thread, and
+.Dv SO_REUSEPORT_LB_CPU_ANY
+clears the affinity so that the socket again participates in the hashed
+distribution.
+Packets whose processing CPU matches no affinitized member of the group
+are distributed by the hash function as usual.
+Reading the option with
+.Xr getsockopt 2
+returns the CPU id currently affinitized to the socket, or
+.Dv SO_REUSEPORT_LB_CPU_ANY
+if no affinity is set.
 .Pp
 .Dv SO_KEEPALIVE
 enables the

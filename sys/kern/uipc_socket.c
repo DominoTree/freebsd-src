@@ -3963,6 +3963,10 @@ stdopt:
 			error = so->so_proto->pr_ctloutput(so, sopt);
 			break;
 
+		case SO_REUSEPORT_LB_CPU:
+			error = so->so_proto->pr_ctloutput(so, sopt);
+			break;
+
 		case SO_USER_COOKIE:
 			error = sooptcopyin(sopt, &val32, sizeof val32,
 			    sizeof val32);
@@ -4348,6 +4352,10 @@ integer:
 		case SO_MAX_PACING_RATE:
 			optval = so->so_max_pacing_rate;
 			goto integer;
+
+		case SO_REUSEPORT_LB_CPU:
+			error = so->so_proto->pr_ctloutput(so, sopt);
+			break;
 
 		case SO_SPLICE: {
 			off_t n;

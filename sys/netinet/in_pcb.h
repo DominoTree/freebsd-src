@@ -341,6 +341,7 @@ struct inpcb {
 	int	inp_flags;		/* (i) generic IP/datagram flags */
 	int	inp_flags2;		/* (i) generic IP/datagram flags #2*/
 	uint8_t inp_numa_domain;	/* numa domain */
+	int	inp_lb_cpu;		/* (i) SO_REUSEPORT_LB receive-CPU affinity */
 	struct	socket *inp_socket;	/* (i) back pointer to socket */
 	struct	inpcbinfo *inp_pcbinfo;	/* (c) PCB list info */
 	struct	ucred	*inp_cred;	/* (c) cache of socket cred */
@@ -633,6 +634,7 @@ void	in_pcbfree(struct inpcb *);
 int	in_pcbladdr(const struct inpcb *, struct in_addr *, struct in_addr *,
 	    struct ucred *);
 int	in_pcblbgroup_numa(struct inpcb *, int arg);
+int	in_pcblbgroup_cpu(struct inpcb *, int cpu);
 void	in_pcblisten(struct inpcb *);
 struct inpcb *
 	in_pcblookup(struct inpcbinfo *, struct in_addr, u_int,
