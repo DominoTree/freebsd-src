@@ -143,7 +143,7 @@ static struct netisr_handler ip_nh = {
 #ifdef	RSS
 	.nh_m2cpuid = rss_soft_m2cpuid_v4,
 	.nh_policy = NETISR_POLICY_CPU,
-	.nh_dispatch = NETISR_DISPATCH_HYBRID,
+	.nh_dispatch = NETISR_DISPATCH_DEFAULT,
 #else
 	.nh_policy = NETISR_POLICY_FLOW,
 #endif
@@ -163,7 +163,7 @@ static struct netisr_handler ip_direct_nh = {
 	.nh_proto = NETISR_IP_DIRECT,
 	.nh_m2cpuid = rss_soft_m2cpuid_v4,
 	.nh_policy = NETISR_POLICY_CPU,
-	.nh_dispatch = NETISR_DISPATCH_HYBRID,
+	.nh_dispatch = NETISR_DISPATCH_DEFAULT,
 };
 #endif
 
