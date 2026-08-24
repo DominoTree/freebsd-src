@@ -168,8 +168,12 @@ read_remote(int fd, int extbufsize, char *extbuf)
 					}
 				}
 			} else {
-				if ((rlen = read(fd, buff + len, sizeof(buff) - len)) == -1) {
-					strlcpy(neterr, strerror(errno), sizeof(neterr));
+				if ((rlen = read(fd, buff + len, sizeof(buff) - len)) <= 0) {
+					if (rlen == 0)
+						strlcpy(neterr, "connection closed by remote host",
+						    sizeof(neterr));
+					else
+						strlcpy(neterr, strerror(errno), sizeof(neterr));
 					goto error;
 				}
 			}
