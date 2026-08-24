@@ -69,7 +69,7 @@ create_mbox(const char *name)
 	sa.sa_handler = SIG_DFL;
 	sigaction(SIGCHLD, &sa, &osa);
 
-	do_timeout(100, 0);
+	do_timeout(100);
 
 	child = fork();
 	switch (child) {
@@ -92,7 +92,7 @@ create_mbox(const char *name)
 
 		e = errno;
 
-		do_timeout(0, 0);
+		do_timeout(0);
 
 		if (waitchild == -1 && e == EINTR) {
 			syslog(LOG_ERR, "hung child while creating mbox `%s': %m", name);
@@ -147,14 +147,14 @@ deliver_local(struct qitem *it)
 
 retry:
 	/* wait for a maximum of 100s to get the lock to the file */
-	do_timeout(100, 0);
+	do_timeout(100);
 
 	/* don't use O_CREAT here, because we might be running as the wrong user. */
 	mbox = open_locked(fn, O_WRONLY|O_APPEND);
 	if (mbox < 0) {
 		int e = errno;
 
-		do_timeout(0, 0);
+		do_timeout(0);
 
 		switch (e) {
 		case EACCES:
@@ -180,7 +180,7 @@ retry:
 		}
 		return (1);
 	}
-	do_timeout(0, 0);
+	do_timeout(0);
 
 	mboxlen = lseek(mbox, 0, SEEK_END);
 

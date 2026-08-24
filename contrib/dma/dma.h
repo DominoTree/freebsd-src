@@ -246,7 +246,8 @@ void errlog(int, const char *, ...) __attribute__((__format__ (__printf__, 2, 3)
 void errlogx(int, const char *, ...) __attribute__((__format__ (__printf__, 2, 3)));
 void set_username(void);
 void deltmp(void);
-int do_timeout(int, int);
+void do_timeout(int);
+int timeout_reached(void);
 int open_locked(const char *, int, ...);
 char *rfc822date(void);
 int strprefixcmp(const char *, const char *);

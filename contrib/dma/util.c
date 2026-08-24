@@ -41,7 +41,6 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <pwd.h>
-#include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <strings.h>
@@ -250,50 +249,43 @@ deltmp(void)
 	}
 }
 
-static sigjmp_buf sigbuf;
-static int sigbuf_valid;
+static volatile sig_atomic_t timeout_expired;
 
 static void
 sigalrm_handler(int signo)
 {
 	(void)signo;	/* so that gcc doesn't complain */
-	if (sigbuf_valid)
-		siglongjmp(sigbuf, 1);
+	timeout_expired = 1;
 }
 
-int
-do_timeout(int timeout, int dojmp)
+void
+do_timeout(int timeout)
 {
 	struct sigaction act;
-	int ret = 0;
 
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = 0;
+	timeout_expired = 0;
 
 	if (timeout) {
 		act.sa_handler = sigalrm_handler;
 		if (sigaction(SIGALRM, &act, NULL) != 0)
 			syslog(LOG_WARNING, "can not set signal handler: %m");
-		if (dojmp) {
-			ret = sigsetjmp(sigbuf, 1);
-			if (ret)
-				goto disable;
-			/* else just programmed */
-			sigbuf_valid = 1;
-		}
 
 		alarm(timeout);
 	} else {
-disable:
 		alarm(0);
 
 		act.sa_handler = SIG_IGN;
 		if (sigaction(SIGALRM, &act, NULL) != 0)
 			syslog(LOG_WARNING, "can not remove signal handler: %m");
-		sigbuf_valid = 0;
 	}
+}
 
-	return (ret);
+int
+timeout_reached(void)
+{
+	return (timeout_expired);
 }
 
 int
