@@ -132,10 +132,7 @@ read_remote(int fd, int extbufsize, char *extbuf)
 	int done = 0, status = 0, status_running = 0, extbufpos = 0;
 	enum { parse_status, parse_spacedash, parse_rest } parsestate;
 
-	if (do_timeout(CON_TIMEOUT, 1) != 0) {
-		snprintf(neterr, sizeof(neterr), "Timeout reached");
-		return (-1);
-	}
+	do_timeout(CON_TIMEOUT);
 
 	/*
 	 * Remote reading code from femail.c written by Henning Brauer of
@@ -146,6 +143,8 @@ read_remote(int fd, int extbufsize, char *extbuf)
 	parsestate = parse_status;
 	neterr[0] = 0;
 	while (!(done && parsestate == parse_status)) {
+		if (timeout_reached())
+			goto error;
 		rlen = 0;
 		if (pos == 0 ||
 		    (pos > 0 && memchr(buff + pos, '\n', len - pos) == NULL)) {
@@ -169,6 +168,8 @@ read_remote(int fd, int extbufsize, char *extbuf)
 				}
 			} else {
 				if ((rlen = read(fd, buff + len, sizeof(buff) - len)) <= 0) {
+					if (rlen == -1 && errno == EINTR)
+						continue;
 					if (rlen == 0)
 						strlcpy(neterr, "connection closed by remote host",
 						    sizeof(neterr));
@@ -249,7 +250,7 @@ read_remote(int fd, int extbufsize, char *extbuf)
 
 	}
 
-	do_timeout(0, 0);
+	do_timeout(0);
 
 	/* chop off trailing newlines */
 	while (neterr[0] != 0 && strchr("\r\n", neterr[strlen(neterr) - 1]) != 0)
@@ -258,7 +259,9 @@ read_remote(int fd, int extbufsize, char *extbuf)
 	return (status/100);
 
 error:
-	do_timeout(0, 0);
+	if (timeout_reached())
+		strlcpy(neterr, "Timeout reached", sizeof(neterr));
+	do_timeout(0);
 	return (-1);
 }
 
