@@ -32,6 +32,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/jail.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -318,6 +319,96 @@ ATF_TC_CLEANUP(tcp_v4mapped_bind, tc)
 	restore_portrange();
 }
 
+ATF_TC(tcp_v4mapped_connect_jailed);
+ATF_TC_HEAD(tcp_v4mapped_connect_jailed, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "descr",
+	    "Connect a jailed wildcard IPv6 socket to a v4 mapped address");
+}
+/*
+ * In a jail an IPv4 socket bound to INADDR_ANY gets the jail address, but a
+ * dual-stack IPv6 socket bound to the unspecified address keeps it.  Then a
+ * connect() to a v4 mapped address runs the IPv4 code with a wildcard local
+ * address, which must not be mistaken for an address foreign to the jail.
+ */
+ATF_TC_BODY(tcp_v4mapped_connect_jailed, tc)
+{
+	struct in_addr ip4 = { htonl(INADDR_LOOPBACK) };
+	struct in6_addr ip6 = IN6ADDR_LOOPBACK_INIT;
+	struct jail jconf = {
+		.version = JAIL_API_VERSION,
+		.path = __DECONST(char *, "/"),
+		.hostname = __DECONST(char *, "test"),
+		.ip4s = 1,
+		.ip4 = &ip4,
+		.ip6s = 1,
+		.ip6 = &ip6,
+	};
+	struct sockaddr_in sin = {
+		.sin_family = AF_INET,
+		.sin_len = sizeof(sin),
+		.sin_addr = ip4,
+	};
+	struct sockaddr_in6 sin6 = {
+		.sin6_family = AF_INET6,
+		.sin6_len = sizeof(sin6),
+	};
+	struct addrinfo ai_hint, *aip;
+	socklen_t salen;
+	int asock, csock, error, lsock, off = 0;
+
+	ATF_REQUIRE_MSG(jail(&jconf) > 0, "jail() failed: %s", strerror(errno));
+
+	/* Setup the listen socket on the jail address. */
+	lsock = socket(PF_INET, SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(lsock >= 0, "socket() for listen socket failed: %s",
+	    strerror(errno));
+	error = bind(lsock, (struct sockaddr *)&sin, sizeof(sin));
+	ATF_REQUIRE_MSG(error == 0, "bind() failed: %s", strerror(errno));
+	error = listen(lsock, 1);
+	ATF_REQUIRE_MSG(error == 0, "listen() failed: %s", strerror(errno));
+	salen = sizeof(sin);
+	error = getsockname(lsock, (struct sockaddr *)&sin, &salen);
+	ATF_REQUIRE_MSG(error == 0,
+	    "getsockname() for listen socket failed: %s", strerror(errno));
+
+	/* Bind a dual-stack client socket to the unspecified address. */
+	csock = socket(PF_INET6, SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(csock >= 0, "socket() for client socket failed: %s",
+	    strerror(errno));
+	error = setsockopt(csock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+	ATF_REQUIRE_MSG(error == 0, "setsockopt(IPV6_ONLY = 0) failed: %s",
+	    strerror(errno));
+	error = bind(csock, (struct sockaddr *)&sin6, sizeof(sin6));
+	ATF_REQUIRE_MSG(error == 0, "client bind() failed: %s",
+	    strerror(errno));
+	salen = sizeof(sin6);
+	error = getsockname(csock, (struct sockaddr *)&sin6, &salen);
+	ATF_REQUIRE_MSG(error == 0,
+	    "getsockname() for client socket failed: %s", strerror(errno));
+	ATF_REQUIRE_MSG(IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr) &&
+	    sin6.sin6_port != 0, "unexpected client socket name");
+
+	/* Connect to the listener through its v4 mapped address. */
+	memset(&ai_hint, 0, sizeof(ai_hint));
+	ai_hint.ai_family = AF_INET6;
+	ai_hint.ai_flags = AI_NUMERICHOST | AI_V4MAPPED;
+	error = getaddrinfo("127.0.0.1", NULL, &ai_hint, &aip);
+	ATF_REQUIRE_MSG(error == 0, "getaddrinfo: %s", gai_strerror(error));
+	memcpy(&sin6, aip->ai_addr, sizeof(sin6));
+	sin6.sin6_port = sin.sin_port;
+	freeaddrinfo(aip);
+	error = connect(csock, (struct sockaddr *)&sin6, sizeof(sin6));
+	ATF_REQUIRE_MSG(error == 0, "connect() failed: %s", strerror(errno));
+	asock = accept(lsock, NULL, NULL);
+	ATF_REQUIRE_MSG(asock >= 0, "accept() failed: %s", strerror(errno));
+
+	ATF_REQUIRE(close(asock) == 0);
+	ATF_REQUIRE(close(csock) == 0);
+	ATF_REQUIRE(close(lsock) == 0);
+}
+
 ATF_TC(udp_v4mapped_sendto);
 ATF_TC_HEAD(udp_v4mapped_sendto, tc)
 {
@@ -392,6 +483,7 @@ ATF_TC_BODY(udp_v4mapped_sendto, tc)
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, tcp_v4mapped_bind);
+	ATF_TP_ADD_TC(tp, tcp_v4mapped_connect_jailed);
 	ATF_TP_ADD_TC(tp, udp_v4mapped_sendto);
 
 	return (atf_no_error());
