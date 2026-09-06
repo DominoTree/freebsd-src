@@ -1653,13 +1653,9 @@ in_pcbconnect(struct inpcb *inp, struct sockaddr_in *sin, struct ucred *cred)
 			return (EADDRINUSE);
 		}
 		if ((inp->inp_flags & INP_UNCONNECTED) == 0) {
-			struct inpcb *i __diagused;
 			struct inpcblbgroup *g __diagused;
 
-			i = in_pcblookup_wild_locked(ipictx.pcbinfo,
-			    laddr, inp->inp_lport, RT_ALL_FIBS,
-			    &ipictx.wbucket);
-			MPASS(i);
+			inpcbinfo_ctx_wildlock(&ipictx, inp->inp_lport);
 			if (inp->inp_flags & INP_INLBGROUP) {
 				g = in_pcblbgroup_find(inp, &ipictx.lbbucket);
 				MPASS(g);
@@ -3346,6 +3342,7 @@ void
 in_pcbrehash(struct inpcb *inp, struct inpcbinfo_ctx *ipictx)
 {
 #ifdef INVARIANTS
+	struct inpcb *i;
 	uint32_t hash;
 
 	INP_WLOCK_ASSERT(inp);
@@ -3367,6 +3364,10 @@ in_pcbrehash(struct inpcb *inp, struct inpcbinfo_ctx *ipictx)
 	MPASS(ipictx->ebucket == &ipictx->pcbinfo->ipi_hash_exact[hash]);
 	INPBUCKET_LOCK_ASSERT(ipictx->ebucket);
 	INPBUCKET_LOCK_ASSERT(ipictx->wbucket);
+	CK_LIST_FOREACH(i, &ipictx->wbucket->head, inp_hash_wild)
+		if (i == inp)
+			break;
+	MPASS(i == inp);
 #endif
 
 	/* See the comment in in_pcbinshash(). */
