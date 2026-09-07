@@ -402,14 +402,27 @@ ppt_is_mmio(struct vm *vm, vm_paddr_t gpa)
 	return (false);
 }
 
-static void
+static bool
 ppt_pci_reset(device_t dev)
 {
+	uint16_t pmcsr;
+	int pmcap;
 
 	if (pcie_flr(dev, 1000, true))
-		return;
+		return (true);
+
+	/*
+	 * A function advertising No_Soft_Reset keeps its state across D3, so
+	 * the power reset below would not reset it.
+	 */
+	if (pci_find_cap(dev, PCIY_PMG, &pmcap) == 0) {
+		pmcsr = pci_read_config(dev, pmcap + PCIR_POWER_STATUS, 2);
+		if ((pmcsr & PCIM_PSTAT_NOSOFTRESET) != 0)
+			return (false);
+	}
 
 	pci_power_reset(dev);
+	return (true);
 }
 
 static uint16_t
@@ -434,6 +447,7 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	struct pptdev *ppt;
 	int error;
 	uint16_t cmd;
+	bool reset_ok;
 
 	PPT_LOCK();
 	/* Passing NULL requires the device to be unowned. */
@@ -447,9 +461,17 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	/* Release the lock to allow for longer reset cycles */
 	PPT_UNLOCK();
 	pci_save_state(ppt->dev);
-	ppt_pci_reset(ppt->dev);
+	reset_ok = ppt_pci_reset(ppt->dev);
 	pci_restore_state(ppt->dev);
 	PPT_LOCK();
+
+	if (!reset_ok) {
+		device_printf(ppt->dev,
+		    "no function level reset and No_Soft_Reset is set; "
+		    "refusing to assign a device that cannot be reset\n");
+		error = EOPNOTSUPP;
+		goto out_reset;
+	}
 
 	error = iommu_add_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
@@ -488,7 +510,9 @@ ppt_unassign_device(struct vm *vm, int bus, int slot, int func)
 	/* Release the lock to allow for longer reset/teardown cycles */
 	PPT_UNLOCK();
 	pci_save_state(ppt->dev);
-	ppt_pci_reset(ppt->dev);
+	if (!ppt_pci_reset(ppt->dev))
+		device_printf(ppt->dev,
+		    "returned to the host without being reset\n");
 	pci_restore_state(ppt->dev);
 	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
