@@ -7013,6 +7013,34 @@ pcie_wait_for_pending_transactions(device_t dev, u_int max_delay)
 	return (true);
 }
 
+#define	PCI_RESET_READY_TIMEOUT_MS	60000
+
+/*
+ * Wait for a function to answer configuration requests after a reset; one
+ * that has not finished answers with all ones.  Vendor ID is emulated for
+ * SR-IOV VFs, so poll the Command register.  May sleep.
+ */
+static bool
+pci_wait_for_ready(device_t dev, u_int max_delay)
+{
+	u_int delay;
+
+	delay = 1;
+	while (pci_read_config(dev, PCIR_COMMAND, 2) == 0xffff) {
+		if (max_delay == 0)
+			return (false);
+
+		/* Back off so that a prompt function costs one read. */
+		if (delay > max_delay)
+			delay = max_delay;
+		pause_sbt("pcirdy", delay * SBT_1MS, 0, C_HARDCLOCK);
+		max_delay -= delay;
+		delay *= 2;
+	}
+
+	return (true);
+}
+
 /*
  * Determine the maximum Completion Timeout in microseconds.
  *
@@ -7159,6 +7187,8 @@ pcie_flr_supported(device_t dev)
  * responsible for saving and restoring any registers including
  * PCI-standard registers via pci_save_state() and
  * pci_restore_state().
+ *
+ * On return the function is answering, or the failure was reported.
  */
 bool
 pcie_flr(device_t dev, u_int max_delay, bool force)
@@ -7210,6 +7240,13 @@ pcie_flr(device_t dev, u_int max_delay, bool force)
 	/* Wait for 100ms. */
 	pause_sbt("pcieflr", (100 + compl_delay) * SBT_1MS, 0, C_HARDCLOCK);
 
+	/* An unfinished reset reads back as a false pending. */
+	if (!pci_wait_for_ready(dev, PCI_RESET_READY_TIMEOUT_MS)) {
+		pci_printf(&dinfo->cfg, "No response %d ms after FLR\n",
+		    100 + compl_delay + PCI_RESET_READY_TIMEOUT_MS);
+		return (true);
+	}
+
 	if (pci_read_config(dev, cap + PCIER_DEVICE_STA, 2) &
 	    PCIEM_STA_TRANSACTION_PND)
 		pci_printf(&dinfo->cfg, "Transactions pending after FLR!\n");
@@ -7224,6 +7261,7 @@ pcie_flr(device_t dev, u_int max_delay, bool force)
 int
 pci_power_reset(device_t dev)
 {
+	struct pci_devinfo *dinfo = device_get_ivars(dev);
 	int ps;
 
 	ps = pci_get_powerstate(dev);
@@ -7231,6 +7269,11 @@ pci_power_reset(device_t dev)
 		pci_set_powerstate(dev, PCI_POWERSTATE_D0);
 	pci_set_powerstate(dev, PCI_POWERSTATE_D3);
 	pci_set_powerstate(dev, ps);
+
+	/* Two D3 transitions, 10 ms each. */
+	if (!pci_wait_for_ready(dev, PCI_RESET_READY_TIMEOUT_MS))
+		pci_printf(&dinfo->cfg, "No response %d ms after power reset\n",
+		    20 + PCI_RESET_READY_TIMEOUT_MS);
 	return (0);
 }
 
