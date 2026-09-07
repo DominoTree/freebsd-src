@@ -7339,9 +7339,11 @@ pci_reset_child(device_t dev, device_t child, int flags)
 				pci_power_reset(child);
 			BUS_RESET_POST(dev, child);
 		}
-		if ((flags & DEVF_RESET_DETACH) != 0)
+		if ((flags & DEVF_RESET_DETACH) != 0) {
+			/* Detaching saved the state the reset just cleared. */
+			pci_restore_state(child);
 			device_probe_and_attach(child);
-		else
+		} else
 			BUS_RESUME_CHILD(dev, child);
 	}
 	return (error);
