@@ -3006,10 +3006,24 @@ zpool_scan_range(zpool_handle_t *zhp, pool_scan_func_t func,
 	 * order to prevent problems where we have a newer userland than
 	 * kernel, we keep this check in place. That prevents erroneous
 	 * failures when an older kernel returns ECANCELED in those cases.
+	 *
+	 * Case 3 is reported to the caller, so it is only swallowed here when
+	 * an error scrub is actually paused and this is therefore case 2.
 	 */
 	if (err == ECANCELED && (func == POOL_SCAN_SCRUB ||
-	    func == POOL_SCAN_ERRORSCRUB) && cmd == POOL_SCRUB_NORMAL)
-		return (0);
+	    func == POOL_SCAN_ERRORSCRUB) && cmd == POOL_SCRUB_NORMAL) {
+		pool_scan_stat_t *ps = NULL;
+		uint_t psc;
+
+		(void) nvlist_lookup_uint64_array(fnvlist_lookup_nvlist(
+		    zhp->zpool_config, ZPOOL_CONFIG_VDEV_TREE),
+		    ZPOOL_CONFIG_SCAN_STATS, (uint64_t **)&ps, &psc);
+
+		if (func == POOL_SCAN_SCRUB || (ps != NULL &&
+		    ps->pss_error_scrub_state == DSS_ERRORSCRUBBING &&
+		    ps->pss_pass_error_scrub_pause != 0))
+			return (0);
+	}
 	/*
 	 * The following cases have been handled here:
 	 * 1. Paused a scrub/error scrub if there is none in progress.
@@ -3105,6 +3119,8 @@ zpool_scan_range(zpool_handle_t *zhp, pool_scan_func_t func,
 			/* handles case 6 */
 			return (zfs_error(hdl, EZFS_RESILVERING, errbuf));
 		}
+	} else if (err == ECANCELED && func == POOL_SCAN_ERRORSCRUB) {
+		return (zfs_error(hdl, EZFS_NO_ERRORLOG, errbuf));
 	} else if (err == ENOENT) {
 		return (zfs_error(hdl, EZFS_NO_SCRUB, errbuf));
 	} else if (err == ENOTSUP && func == POOL_SCAN_RESILVER) {
