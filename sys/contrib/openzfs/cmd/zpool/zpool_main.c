@@ -10713,6 +10713,15 @@ print_error_log(zpool_handle_t *zhp)
 	if (zpool_get_errlog(zhp, &nverrlist) != 0)
 		return;
 
+	if (nvlist_next_nvpair(nverrlist, NULL) == NULL) {
+		(void) printf(gettext("errors: Permanent errors have been "
+		    "detected, but the affected blocks are no longer\n"));
+		(void) printf(gettext("\treferenced by any file.  Run a scrub "
+		    "to re-check and clear them.\n"));
+		nvlist_free(nverrlist);
+		return;
+	}
+
 	(void) printf("errors: Permanent errors have been "
 	    "detected in the following files:\n\n");
 
