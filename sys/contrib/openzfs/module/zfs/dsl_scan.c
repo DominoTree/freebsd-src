@@ -841,6 +841,7 @@ dsl_errorscrub_setup_sync(void *arg, dmu_tx_t *tx)
 	ASSERT(*funcp > POOL_SCAN_NONE && *funcp < POOL_SCAN_FUNCS);
 
 	memset(&scn->errorscrub_phys, 0, sizeof (scn->errorscrub_phys));
+	spa_errlog_clear_scrub(spa, tx);
 	scn->errorscrub_phys.dep_func = *funcp;
 	scn->errorscrub_phys.dep_state = DSS_ERRORSCRUBBING;
 	scn->errorscrub_phys.dep_start_time = gethrestime_sec();
@@ -981,6 +982,7 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 	 */
 	memset(&scn->errorscrub_phys, 0, sizeof (scn->errorscrub_phys));
 	dsl_errorscrub_sync_state(scn, tx);
+	spa_errlog_clear_scrub(spa, tx);
 
 	scn->scn_phys.scn_func = setup_sync_arg->func;
 	scn->scn_phys.scn_flags = setup_sync_arg->flags;

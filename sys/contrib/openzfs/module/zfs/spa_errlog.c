@@ -1240,6 +1240,35 @@ delete_errlog(spa_t *spa, uint64_t spa_err_obj, dmu_tx_t *tx)
 }
 
 /*
+ * Discard the scrub error log.  A scan must start from an empty log, or
+ * entries predating it are rotated into the last error log when it ends and
+ * can no longer be cleared.
+ */
+void
+spa_errlog_clear_scrub(spa_t *spa, dmu_tx_t *tx)
+{
+	spa_error_entry_t *se;
+	void *cookie;
+
+	mutex_enter(&spa->spa_errlist_lock);
+	cookie = NULL;
+	while ((se = avl_destroy_nodes(&spa->spa_errlist_scrub,
+	    &cookie)) != NULL)
+		kmem_free(se, sizeof (spa_error_entry_t));
+	mutex_exit(&spa->spa_errlist_lock);
+
+	mutex_enter(&spa->spa_errlog_lock);
+	if (spa->spa_errlog_scrub != 0) {
+		delete_errlog(spa, spa->spa_errlog_scrub, tx);
+		spa->spa_errlog_scrub = 0;
+		VERIFY0(zap_update(spa->spa_meta_objset,
+		    DMU_POOL_DIRECTORY_OBJECT, DMU_POOL_ERRLOG_SCRUB,
+		    sizeof (uint64_t), 1, &spa->spa_errlog_scrub, tx));
+	}
+	mutex_exit(&spa->spa_errlog_lock);
+}
+
+/*
  * Sync the error log out to disk.  This is a little tricky because the act of
  * writing the error log requires the spa_errlist_lock.  So, we need to lock the
  * error lists, take a copy of the lists, and then reinitialize them.  Then, we
@@ -1469,6 +1498,7 @@ EXPORT_SYMBOL(spa_approx_errlog_size);
 EXPORT_SYMBOL(spa_get_last_errlog_size);
 EXPORT_SYMBOL(spa_get_errlog);
 EXPORT_SYMBOL(spa_errlog_rotate);
+EXPORT_SYMBOL(spa_errlog_clear_scrub);
 EXPORT_SYMBOL(spa_errlog_drain);
 EXPORT_SYMBOL(spa_errlog_sync);
 EXPORT_SYMBOL(spa_get_errlists);
