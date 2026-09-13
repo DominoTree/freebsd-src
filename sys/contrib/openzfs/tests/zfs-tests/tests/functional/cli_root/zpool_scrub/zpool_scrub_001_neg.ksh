@@ -58,6 +58,7 @@ log_mustnot zpool scrub -p -s $TESTPOOL
 log_mustnot zpool scrub -e -p $TESTPOOL
 log_mustnot zpool scrub -e -s $TESTPOOL
 log_mustnot zpool scrub -e -C $TESTPOOL
+log_mustnot zpool scrub -a $TESTPOOL
 log_mustnot zpool scrub -e -t $TESTPOOL
 log_mustnot zpool scrub -e -S "2000-01-01" $TESTPOOL
 log_mustnot zpool scrub -e -E "2099-12-31" $TESTPOOL

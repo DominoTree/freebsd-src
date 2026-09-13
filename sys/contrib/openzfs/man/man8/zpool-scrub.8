@@ -143,6 +143,11 @@ The pool must have been scrubbed at least once with the
 feature enabled to use this option.
 Error scrubbing cannot be run simultaneously with other scrubbing or
 resilvering, nor can it be run when a scrub is paused.
+Only blocks recorded in the last error log are checked.
+A full scrub refreshes that log.
+If it is empty there is nothing to do, which is reported as an error unless
+.Fl a
+was given, in which case pools with nothing recorded are skipped.
 This option cannot be combined with
 .Fl C ,
 .Fl p ,

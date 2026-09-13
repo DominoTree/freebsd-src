@@ -8474,6 +8474,7 @@ typedef struct scrub_cbdata {
 	pool_scrub_flags_t cb_scrub_flags;
 	time_t	cb_date_start;
 	time_t	cb_date_end;
+	boolean_t cb_scrub_all;
 } scrub_cbdata_t;
 
 static boolean_t
@@ -8517,8 +8518,24 @@ scrub_callback(zpool_handle_t *zhp, void *data)
 		return (1);
 	}
 
+	/*
+	 * Under -a, a pool with nothing recorded has nothing to error
+	 * scrub, so skip it rather than fail the batch.
+	 */
+	if (cb->cb_scrub_all && cb->cb_type == POOL_SCAN_ERRORSCRUB) {
+		uint64_t nerr;
+
+		if (nvlist_lookup_uint64(zpool_get_config(zhp, NULL),
+		    ZPOOL_CONFIG_ERRCOUNT, &nerr) == 0 && nerr == 0)
+			return (0);
+	}
+
 	err = zpool_scan_range(zhp, cb->cb_type, cb->cb_scrub_cmd,
 	    cb->cb_scrub_flags, cb->cb_date_start, cb->cb_date_end);
+	if (err != 0 && cb->cb_scrub_all &&
+	    libzfs_errno(zpool_get_handle(zhp)) == EZFS_NO_ERRORLOG)
+		return (0);
+
 	if (err == 0 && zpool_has_checkpoint(zhp) &&
 	    cb->cb_type == POOL_SCAN_SCRUB) {
 		(void) printf(gettext("warning: will not scrub state that "
@@ -8583,17 +8600,17 @@ zpool_do_scrub(int argc, char **argv)
 	cb.cb_scrub_cmd = 0;
 	cb.cb_scrub_flags = 0;
 	cb.cb_date_start = cb.cb_date_end = 0;
+	cb.cb_scrub_all = B_FALSE;
 
 	boolean_t is_error_scrub = B_FALSE;
 	boolean_t is_pause = B_FALSE;
 	boolean_t is_stop = B_FALSE;
-	boolean_t scrub_all = B_FALSE;
 
 	/* check options */
 	while ((c = getopt(argc, argv, "aspweCE:S:t")) != -1) {
 		switch (c) {
 		case 'a':
-			scrub_all = B_TRUE;
+			cb.cb_scrub_all = B_TRUE;
 			break;
 		case 'e':
 			is_error_scrub = B_TRUE;
@@ -8713,7 +8730,13 @@ zpool_do_scrub(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc < 1 && !scrub_all) {
+	if (cb.cb_scrub_all && argc > 0) {
+		(void) fprintf(stderr, gettext("-a cannot be combined with "
+		    "individual pools\n"));
+		usage(B_FALSE);
+	}
+
+	if (argc < 1 && !cb.cb_scrub_all) {
 		(void) fprintf(stderr, gettext("missing pool name argument\n"));
 		usage(B_FALSE);
 	}
@@ -8745,6 +8768,7 @@ zpool_do_resilver(int argc, char **argv)
 	cb.cb_scrub_cmd = POOL_SCRUB_NORMAL;
 	cb.cb_scrub_flags = 0;
 	cb.cb_date_start = cb.cb_date_end = 0;
+	cb.cb_scrub_all = B_FALSE;
 
 	/* check options */
 	while ((c = getopt(argc, argv, "")) != -1) {
