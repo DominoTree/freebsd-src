@@ -251,6 +251,9 @@ libzfs_error_description(libzfs_handle_t *hdl)
 		    "use 'zpool scrub -e' to resume error scrub"));
 	case EZFS_NO_SCRUB:
 		return (dgettext(TEXT_DOMAIN, "there is no active scrub"));
+	case EZFS_NO_ERRORLOG:
+		return (dgettext(TEXT_DOMAIN, "the last error log is empty, "
+		    "use 'zpool scrub' to refresh it"));
 	case EZFS_DIFF:
 		return (dgettext(TEXT_DOMAIN, "unable to generate diffs"));
 	case EZFS_DIFFDATA:

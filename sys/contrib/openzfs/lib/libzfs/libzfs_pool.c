@@ -3032,9 +3032,10 @@ zpool_scan_range(zpool_handle_t *zhp, pool_scan_func_t func,
 	 * order to prevent problems where we have a newer userland than
 	 * kernel, we keep this check in place. That prevents erroneous
 	 * failures when an older kernel returns ECANCELED in those cases.
+	 * Cases 2 and 3 are told apart below.
 	 */
-	if (err == ECANCELED && (func == POOL_SCAN_SCRUB ||
-	    func == POOL_SCAN_ERRORSCRUB) && cmd == POOL_SCRUB_NORMAL)
+	if (err == ECANCELED && func == POOL_SCAN_SCRUB &&
+	    cmd == POOL_SCRUB_NORMAL)
 		return (0);
 	/*
 	 * The following cases have been handled here:
@@ -3131,6 +3132,26 @@ zpool_scan_range(zpool_handle_t *zhp, pool_scan_func_t func,
 			/* handles case 6 */
 			return (zfs_error(hdl, EZFS_RESILVERING, errbuf));
 		}
+	} else if (err == ECANCELED && func == POOL_SCAN_ERRORSCRUB &&
+	    cmd == POOL_SCRUB_NORMAL) {
+		nvlist_t *nvroot;
+		pool_scan_stat_t *ps = NULL;
+		uint_t psc;
+		boolean_t missing;
+
+		/*
+		 * Case 2 above: an error scrub is in progress once the
+		 * resume has taken effect, so read the state afresh.
+		 */
+		if (zpool_refresh_stats(zhp, &missing) == 0 && !missing &&
+		    nvlist_lookup_nvlist(zhp->zpool_config,
+		    ZPOOL_CONFIG_VDEV_TREE, &nvroot) == 0 &&
+		    nvlist_lookup_uint64_array(nvroot,
+		    ZPOOL_CONFIG_SCAN_STATS, (uint64_t **)&ps, &psc) == 0 &&
+		    POOL_SCAN_STAT_VALID(pss_error_scrub_state, psc) &&
+		    ps->pss_error_scrub_state == DSS_ERRORSCRUBBING)
+			return (0);
+		return (zfs_error(hdl, EZFS_NO_ERRORLOG, errbuf));
 	} else if (err == ENOENT) {
 		return (zfs_error(hdl, EZFS_NO_SCRUB, errbuf));
 	} else if (err == ENOTSUP && func == POOL_SCAN_RESILVER) {
