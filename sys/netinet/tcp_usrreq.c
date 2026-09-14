@@ -125,6 +125,18 @@ static void	tcp_fill_info(const struct tcpcb *, struct tcp_info *);
 
 static int	tcp_pru_options_support(struct tcpcb *tp, int flags);
 
+VNET_DEFINE(bool, tcp_reuseport_lb_accept_cpu) = true;
+SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, reuseport_lb_accept_cpu,
+    CTLFLAG_VNET | CTLFLAG_RWTUN, &VNET_NAME(tcp_reuseport_lb_accept_cpu), 0,
+    "Learn SO_REUSEPORT_LB receive and listener CPUs from accept(2)");
+SYSCTL_BOOL(_net_inet_tcp, OID_AUTO, reuseport_lb_balance,
+    CTLFLAG_VNET | CTLFLAG_RWTUN, &VNET_NAME(in_pcblb_balance), 0,
+    "Deal SO_REUSEPORT_LB connections equally across listeners");
+SYSCTL_COUNTER_U64(_net_inet_tcp, OID_AUTO, reuseport_lb_by_map, CTLFLAG_RD,
+    &in_pcblb_by_map, "SO_REUSEPORT_LB listeners picked by receive-CPU map");
+SYSCTL_COUNTER_U64(_net_inet_tcp, OID_AUTO, reuseport_lb_by_hash, CTLFLAG_RD,
+    &in_pcblb_by_hash, "SO_REUSEPORT_LB listeners picked by hash");
+
 static void
 tcp_bblog_pru(struct tcpcb *tp, uint32_t pru, int error)
 {
@@ -454,6 +466,16 @@ out:
 	return (error);
 }
 #endif /* INET6 */
+
+static void
+tcp_usr_accepted(struct socket *head, struct socket *so)
+{
+	struct inpcb *inp;
+
+	inp = sotoinpcb(so);
+	if (inp != NULL && V_tcp_reuseport_lb_accept_cpu)
+		in_pcblbgroup_accepted(sotoinpcb(head), inp);
+}
 
 #ifdef INET
 /*
@@ -1346,6 +1368,7 @@ out:
 #ifdef INET
 struct protosw tcp_protosw = {
 	.pr_type =		SOCK_STREAM,
+	.pr_accepted =		tcp_usr_accepted,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED | PR_IMPLOPCL | PR_WANTRCVD |
 				    PR_CAPATTACH,
@@ -1375,6 +1398,7 @@ struct protosw tcp_protosw = {
 #ifdef INET6
 struct protosw tcp6_protosw = {
 	.pr_type =		SOCK_STREAM,
+	.pr_accepted =		tcp_usr_accepted,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED | PR_IMPLOPCL |PR_WANTRCVD |
 				    PR_CAPATTACH,

@@ -770,6 +770,7 @@ syncache_socket(struct syncache *sc, struct socket *lso, struct mbuf *m)
 	struct inpcb *inp = NULL;
 	struct socket *so;
 	struct tcpcb *tp;
+	uint16_t tag;
 	int error;
 	char *s;
 
@@ -918,6 +919,16 @@ syncache_socket(struct syncache *sc, struct socket *lso, struct mbuf *m)
 #ifdef NUMA
 	inp->inp_numa_domain = sc->sc_numa_domain;
 #endif
+	inp->inp_lb_cpu = curcpu;
+	if (m != NULL && M_HASHTYPE_ISRSS(m) && m->m_pkthdr.rcvif != NULL &&
+	    (if_getflags(m->m_pkthdr.rcvif) & IFF_LOOPBACK) == 0)
+		inp->inp_lb_flags |= INP_LB_RXHASH;
+	if (V_tcp_reuseport_lb_accept_cpu &&
+	    (lso->so_options & SO_REUSEPORT_LB) != 0) {
+		tag = atomic_load_16(&sotoinpcb(lso)->inp_lb_cpu);
+		tp->t_hpts_cpu = tag != INP_LB_CPU_NONE ? tag : curcpu;
+		tp->t_flags2 |= TF2_HPTS_CPU_SET;
+	}
 
 	tp->t_state = TCPS_SYN_RECEIVED;
 	tp->iss = sc->sc_iss;

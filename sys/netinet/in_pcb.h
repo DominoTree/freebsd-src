@@ -118,7 +118,8 @@ struct xinpcb {
 	int32_t		inp_flags2;		/* (s) */
 	uint32_t	inp_unused;
 	int32_t		in6p_cksum;		/* (n) */
-	int32_t		inp_spare32[4];
+	int32_t		inp_lb_cpu;		/* (s) LB CPU tag, -1 if none */
+	int32_t		inp_spare32[3];
 	uint16_t	in6p_hops;		/* (n) */
 	uint8_t		inp_ip_tos;		/* (n) */
 	int8_t		pad8;
@@ -238,6 +239,12 @@ struct xinpgen {
     "\22INP_2PCP_SET\23INP_2PCP_BIT0\24INP_2PCP_BIT1" \
     "\25INP_2PCP_BIT2"
 
+/* Values for inp_lb_cpu. */
+#define	INP_LB_CPU_NONE		0xffff	/* no receive-CPU tag */
+
+/* Values for inp_lb_flags. */
+#define	INP_LB_RXHASH		0x01	/* flow hash placed the handshake CPU */
+
 struct sockopt_parameters {
 	struct in_conninfo sop_inc;
 	uint64_t sop_id;
@@ -285,6 +292,7 @@ struct xktls_session {
 #include <sys/sysctl.h>
 #include <vm/uma.h>
 #include <sys/ck.h>
+#include <sys/counter.h>
 
 /*
  * struct inpcb captures the network layer state for TCP, UDP, and raw IPv4 and
@@ -341,6 +349,8 @@ struct inpcb {
 	int	inp_flags;		/* (i) generic IP/datagram flags */
 	int	inp_flags2;		/* (i) generic IP/datagram flags #2*/
 	uint8_t inp_numa_domain;	/* numa domain */
+	uint8_t inp_lb_flags;		/* (i,h) LB tag flags */
+	uint16_t inp_lb_cpu;		/* (i,h) LB receive-CPU tag */
 	struct	socket *inp_socket;	/* (i) back pointer to socket */
 	struct	inpcbinfo *inp_pcbinfo;	/* (c) PCB list info */
 	struct	ucred	*inp_cred;	/* (c) cache of socket cred */
@@ -382,7 +392,7 @@ struct inpcb {
 	};
 	CK_LIST_ENTRY(inpcb) inp_portlist;	/* (r:e/w:h) port list */
 	uint64_t	inp_gencnt;	/* (c) generation count */
-	void		*spare_ptr;	/* Spare pointer. */
+	struct inpcblbgroup *inp_lbgroup;	/* (h) group, or NULL */
 	rt_gen_t	inp_rt_cookie;	/* generation for route entry */
 	union {				/* cached L3 information */
 		struct route inp_route;
@@ -531,6 +541,9 @@ void 	inp_4tuple_get(struct inpcb *inp, uint32_t *laddr, uint16_t *lp,
 
 VNET_DECLARE(uint32_t, in_pcbhashseed);
 #define	V_in_pcbhashseed	VNET(in_pcbhashseed)
+VNET_DECLARE(bool, in_pcblb_balance);
+#define	V_in_pcblb_balance	VNET(in_pcblb_balance)
+extern counter_u64_t in_pcblb_by_map, in_pcblb_by_hash;
 
 /*
  * Wildcard matching hash is not just a microoptimisation!  The hash for
@@ -630,6 +643,7 @@ void	in_pcbdisconnect(struct inpcb *);
 void	in_pcbfree(struct inpcb *);
 int	in_pcbladdr(const struct inpcb *, struct in_addr *, struct in_addr *,
 	    struct ucred *);
+void	in_pcblbgroup_accepted(struct inpcb *, struct inpcb *);
 int	in_pcblbgroup_numa(struct inpcb *, int arg);
 void	in_pcblisten(struct inpcb *);
 struct inpcb *
