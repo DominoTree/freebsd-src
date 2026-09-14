@@ -28,18 +28,27 @@
  */
 
 #include <sys/param.h>
+#include <sys/cpuset.h>
 #include <sys/event.h>
 #include <sys/filio.h>
 #include <sys/ioccom.h>
 #include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
 
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <netinet/tcp.h>
+#include <netinet/tcp_var.h>
 
 #include <err.h>
 #include <errno.h>
+#include <limits.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -702,6 +711,246 @@ ATF_TC_BODY(connect_udp6, tc)
 	ATF_REQUIRE_MSG(len == 1, "expected data available");
 }
 
+/*
+ * Helpers for the receive-CPU tag, which userland reads from the pcb list.
+ */
+
+/* The kernel address of the inpcb behind sd, from its descriptor entry. */
+static uint64_t
+lb_fd_inpcb(int sd)
+{
+	struct kinfo_file *kf;
+	char *buf, *p;
+	size_t len;
+	uint64_t inpcb;
+	int mib[4];
+
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_PROC;
+	mib[2] = KERN_PROC_FILEDESC;
+	mib[3] = getpid();
+	ATF_REQUIRE_MSG(sysctl(mib, nitems(mib), NULL, &len, NULL, 0) == 0,
+	    "sysctl kern.proc.filedesc failed: %s", strerror(errno));
+	len *= 2;
+	buf = malloc(len);
+	ATF_REQUIRE_MSG(buf != NULL, "malloc() failed: %s", strerror(errno));
+	ATF_REQUIRE_MSG(sysctl(mib, nitems(mib), buf, &len, NULL, 0) == 0,
+	    "sysctl kern.proc.filedesc failed: %s", strerror(errno));
+	inpcb = 0;
+	for (p = buf; p < buf + len; p += kf->kf_structsize) {
+		kf = (struct kinfo_file *)(void *)p;
+		if (kf->kf_structsize == 0)
+			break;
+		if (kf->kf_fd == sd && kf->kf_type == KF_TYPE_SOCKET) {
+			inpcb = kf->kf_un.kf_sock.kf_sock_inpcb;
+			break;
+		}
+	}
+	free(buf);
+	ATF_REQUIRE_MSG(inpcb != 0, "no inpcb behind descriptor %d", sd);
+	return (inpcb);
+}
+
+/*
+ * The receive-CPU tag of TCP socket sd, or -1 if it has none.  The members
+ * of a group share one local address and port, so the socket is found by
+ * the pointer its descriptor entry carries, not by its addresses.
+ */
+static int
+lb_cpu_get(int sd)
+{
+	struct xinpgen *xig;
+	struct xtcpcb *xt;
+	char *buf, *p;
+	size_t len;
+	uint64_t inpcb;
+	int cpu;
+
+	inpcb = lb_fd_inpcb(sd);
+	ATF_REQUIRE_MSG(sysctlbyname("net.inet.tcp.pcblist", NULL, &len, NULL,
+	    0) == 0, "sysctl net.inet.tcp.pcblist failed: %s", strerror(errno));
+	len *= 2;
+	buf = malloc(len);
+	ATF_REQUIRE_MSG(buf != NULL, "malloc() failed: %s", strerror(errno));
+	ATF_REQUIRE_MSG(sysctlbyname("net.inet.tcp.pcblist", buf, &len, NULL,
+	    0) == 0, "sysctl net.inet.tcp.pcblist failed: %s", strerror(errno));
+	xig = (struct xinpgen *)(void *)buf;
+	cpu = INT_MIN;
+	for (p = buf + xig->xig_len; p + sizeof(*xig) <= buf + len;
+	    p += xt->xt_len) {
+		xt = (struct xtcpcb *)(void *)p;
+		if (xt->xt_len <= sizeof(*xig))
+			break;
+		if (xt->xt_inp.xi_socket.so_pcb == inpcb) {
+			cpu = xt->xt_inp.inp_lb_cpu;
+			break;
+		}
+	}
+	free(buf);
+	ATF_REQUIRE_MSG(cpu != INT_MIN, "descriptor %d is not in the pcb list",
+	    sd);
+	return (cpu);
+}
+
+/*
+ * Return the CPU count, skipping the test if CPU IDs are not dense, as the
+ * tests below tag listener i with CPU i.
+ */
+static int
+lb_ncpus(void)
+{
+	size_t len;
+	int maxid, ncpu;
+
+	len = sizeof(ncpu);
+	ATF_REQUIRE_MSG(sysctlbyname("hw.ncpu", &ncpu, &len, NULL, 0) == 0,
+	    "sysctl hw.ncpu failed: %s", strerror(errno));
+	len = sizeof(maxid);
+	ATF_REQUIRE_MSG(sysctlbyname("kern.smp.maxid", &maxid, &len, NULL,
+	    0) == 0, "sysctl kern.smp.maxid failed: %s", strerror(errno));
+	if (ncpu != maxid + 1)
+		atf_tc_skip("CPU IDs are not dense");
+	return (ncpu);
+}
+
+static socklen_t
+lb_loopback_addr(int domain, uint16_t port, struct sockaddr_storage *ss)
+{
+	struct sockaddr_in *sin;
+	struct sockaddr_in6 *sin6;
+
+	memset(ss, 0, sizeof(*ss));
+	if (domain == PF_INET) {
+		sin = (struct sockaddr_in *)ss;
+		sin->sin_len = sizeof(*sin);
+		sin->sin_family = AF_INET;
+		sin->sin_port = port;
+		sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		return (sizeof(*sin));
+	}
+	sin6 = (struct sockaddr_in6 *)ss;
+	sin6->sin6_len = sizeof(*sin6);
+	sin6->sin6_family = AF_INET6;
+	sin6->sin6_port = port;
+	sin6->sin6_addr = in6addr_loopback;
+	return (sizeof(*sin6));
+}
+
+static int
+lb_bound_socket(int domain, int type, int flags, uint16_t port,
+    struct sockaddr_storage *ss)
+{
+	socklen_t slen;
+	int error, one, sd;
+
+	sd = socket(domain, type | flags, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	one = 1;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB, &one, sizeof(one));
+	ATF_REQUIRE_MSG(error == 0, "setsockopt(SO_REUSEPORT_LB) failed: %s",
+	    strerror(errno));
+	if (domain == PF_INET6) {
+		error = setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, &one,
+		    sizeof(one));
+		ATF_REQUIRE_MSG(error == 0,
+		    "setsockopt(IPV6_V6ONLY) failed: %s", strerror(errno));
+	}
+
+	slen = lb_loopback_addr(domain, port, ss);
+	error = bind(sd, (struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "bind() failed: %s", strerror(errno));
+	if (type == SOCK_STREAM) {
+		error = listen(sd, 32);
+		ATF_REQUIRE_MSG(error == 0, "listen() failed: %s",
+		    strerror(errno));
+	}
+	if (port == 0) {
+		slen = sizeof(*ss);
+		error = getsockname(sd, (struct sockaddr *)ss, &slen);
+		ATF_REQUIRE_MSG(error == 0, "getsockname() failed: %s",
+		    strerror(errno));
+	}
+	return (sd);
+}
+
+/*
+ * Connect once and return the index of the listening socket that accepted,
+ * storing the accepted socket's receive CPU in *cpup.
+ */
+static int
+lb_connect_once(int domain, const struct sockaddr_storage *ss, int sds[],
+    int nsds, int *cpup)
+{
+	const struct linger lopt = { 1, 0 };
+	socklen_t slen;
+	int csd, error, i, sd;
+
+	slen = ss->ss_family == AF_INET ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
+	sd = socket(domain, SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	error = connect(sd, (const struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "connect() failed: %s", strerror(errno));
+	error = setsockopt(sd, SOL_SOCKET, SO_LINGER, &lopt, sizeof(lopt));
+	ATF_REQUIRE_MSG(error == 0, "Setting linger failed: %s",
+	    strerror(errno));
+
+	for (;;) {
+		for (i = 0; i < nsds; i++) {
+			csd = accept(sds[i], NULL, NULL);
+			if (csd < 0) {
+				ATF_REQUIRE_MSG(errno == EWOULDBLOCK ||
+				    errno == EAGAIN, "accept() failed: %s",
+				    strerror(errno));
+				continue;
+			}
+			*cpup = lb_cpu_get(csd);
+			error = close(csd);
+			ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+			    strerror(errno));
+			error = close(sd);
+			ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+			    strerror(errno));
+			return (i);
+		}
+	}
+}
+
+/*
+ * A listener has no receive-CPU tag until it is given one; a socket returned
+ * by accept(2) carries the CPU on which its handshake was completed.
+ */
+static void
+lb_cpu_export(int domain)
+{
+	struct sockaddr_storage ss;
+	int cpu, error, ncpu, sd;
+
+	ncpu = lb_ncpus();
+	sd = lb_bound_socket(domain, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+
+	(void)lb_connect_once(domain, &ss, &sd, 1, &cpu);
+	ATF_REQUIRE_MSG(cpu >= 0 && cpu < ncpu,
+	    "accepted socket reports CPU %d of %d", cpu, ncpu);
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+
+ATF_TC_WITHOUT_HEAD(lb_cpu_export_ipv4);
+ATF_TC_BODY(lb_cpu_export_ipv4, tc)
+{
+	lb_cpu_export(PF_INET);
+}
+
+ATF_TC_WITHOUT_HEAD(lb_cpu_export_ipv6);
+ATF_TC_BODY(lb_cpu_export_ipv6, tc)
+{
+	lb_cpu_export(PF_INET6);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, basic_ipv4);
@@ -714,6 +963,8 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, connect_bound);
 	ATF_TP_ADD_TC(tp, connect_udp);
 	ATF_TP_ADD_TC(tp, connect_udp6);
+	ATF_TP_ADD_TC(tp, lb_cpu_export_ipv4);
+	ATF_TP_ADD_TC(tp, lb_cpu_export_ipv6);
 
 	return (atf_no_error());
 }
