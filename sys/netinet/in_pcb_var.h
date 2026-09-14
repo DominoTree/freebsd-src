@@ -141,6 +141,15 @@ struct inpcblbgroup *in_pcblbgroup_find(struct inpcb *inp,
 #define	INPCBLB_SLOTS_MAX	4096
 
 /*
+ * How long a group counts accepts into one window before starting another.
+ * A CPU that stops receiving is forgotten after the second one rolls.
+ */
+#define	INPCBLB_RXWINDOW	(10 * hz)
+
+/* Bytes of per-window, per-CPU accept counters carried by each group. */
+#define	INPCBLB_RXCNT_SIZE	(2 * (mp_maxid + 1) * sizeof(uint32_t))
+
+/*
  * A load balance group's selection map.  Each CPU that receives for the
  * group owns a run of slots, and each slot names the member that serves it,
  * so that selection is two loads and the members nearest a CPU are the ones
@@ -177,6 +186,9 @@ struct inpcblbgroup {
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
 	struct inpcblbmap *il_map; /* selection map, or NULL (h) */
+	uint32_t	*il_rxcnt; /* per window, per CPU accepts (h) */
+	uint32_t	il_rxwin;  /* window il_rxcnt is counting into (h) */
+	int		il_rxtick; /* when that window was opened (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
 
