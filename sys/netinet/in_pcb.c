@@ -243,6 +243,235 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, connect_inaddr_wild,
     "Allow connecting to INADDR_ANY or INADDR_BROADCAST for connect(2)");
 #endif
 
+static void
+in_pcblbmap_free_deferred(epoch_context_t ctx)
+{
+	struct inpcblbmap *map;
+
+	map = __containerof(ctx, struct inpcblbmap, lm_epoch_ctx);
+	free(map, M_PCB);
+}
+
+static uint32_t
+in_pcblbgroup_rxcnt(const struct inpcblbgroup *grp, u_int cpu)
+{
+	return (grp->il_rxcnt[cpu] + grp->il_rxcnt[mp_maxid + 1 + cpu]);
+}
+
+static uint32_t
+in_pcblbgroup_key(const struct inpcblbgroup *grp, uint16_t m)
+{
+	return (((uint32_t)grp->il_inp[m]->inp_lb_cpu << 16) | m);
+}
+
+/* Sort members by tag, untagged last. */
+static void
+in_pcblbgroup_order(const struct inpcblbgroup *grp, uint16_t *order)
+{
+	uint32_t i, j, key;
+	uint16_t m;
+
+	for (i = 0; i < grp->il_inpcnt; i++)
+		order[i] = i;
+	for (i = 1; i < grp->il_inpcnt; i++) {
+		m = order[i];
+		key = in_pcblbgroup_key(grp, m);
+		for (j = i; j > 0 &&
+		    in_pcblbgroup_key(grp, order[j - 1]) > key; j--)
+			order[j] = order[j - 1];
+		order[j] = m;
+	}
+}
+
+/* The CPUs within level steps of cpu.  NULL at or past the root. */
+static const cpuset_t *
+in_pcblbgroup_ring(u_int cpu, uint32_t level)
+{
+#ifdef SMP
+	const struct cpu_group *cg;
+	uint32_t i;
+
+	cg = smp_topo_find(cpu_top, cpu);
+	for (i = 1; cg != NULL && cg->cg_parent != NULL; i++, cg = cg->cg_parent)
+		if (i == level)
+			return (&cg->cg_mask);
+#endif
+	return (NULL);
+}
+
+/* Rebuild the map.  No tagged member, no map. */
+static void
+in_pcblbgroup_remap(struct inpcblbgroup *grp)
+{
+	cpuset_t rxset;
+	const cpuset_t *ring;
+	struct inpcblbmap *map, *old;
+	uint32_t *fill, *supply;
+	uint16_t *deficit, *order, *rxcpu;
+	uint64_t acc, total;
+	size_t msz, ssz;
+	uint32_t given, i, j, k, level, nlevels, nmembers, nrx, nslots, take;
+	uint32_t weight;
+	u_int cpu;
+	uint16_t tag;
+	bool learned;
+
+	map = NULL;
+	nmembers = grp->il_inpcnt;
+	if (nmembers == 0)
+		goto publish;
+
+	CPU_ZERO(&rxset);
+	for (i = 0; i < nmembers; i++) {
+		tag = grp->il_inp[i]->inp_lb_cpu;
+		if (tag != INP_LB_CPU_NONE)
+			CPU_SET(tag, &rxset);
+	}
+	if (CPU_EMPTY(&rxset))
+		goto publish;
+	learned = false;
+	nrx = 0;
+	for (cpu = 0; cpu <= mp_maxid; cpu++) {
+		if (in_pcblbgroup_rxcnt(grp, cpu) == 0)
+			continue;
+		learned = true;
+		nrx++;
+	}
+	if (!learned)
+		nrx = CPU_COUNT(&rxset);
+	if (nrx == 0)
+		goto publish;
+
+	nslots = INPCBLB_SLOTS * MAX(nmembers, nrx);
+	if (nslots > INPCBLB_SLOTS_MAX)
+		nslots = INPCBLB_SLOTS_MAX;
+
+	msz = roundup2(sizeof(*map), _Alignof(uint32_t));
+	ssz = roundup2(msz + (mp_maxid + 1) * sizeof(uint32_t),
+	    _Alignof(struct inpcb *));
+	map = malloc(ssz + nslots * sizeof(struct inpcb *), M_PCB,
+	    M_NOWAIT | M_ZERO);
+	if (map == NULL)
+		goto publish;
+	map->lm_cpu = (uint32_t *)((char *)map + msz);
+	map->lm_slot = (struct inpcb **)((char *)map + ssz);
+	map->lm_nslots = nslots;
+
+	supply = malloc(2 * nrx * sizeof(uint32_t) +
+	    (nrx + 2 * nmembers) * sizeof(uint16_t), M_TEMP, M_NOWAIT);
+	if (supply == NULL) {
+		free(map, M_PCB);
+		map = NULL;
+		goto publish;
+	}
+	fill = supply + nrx;
+	rxcpu = (uint16_t *)(fill + nrx);
+	order = rxcpu + nrx;
+	deficit = order + nmembers;
+
+	i = 0;
+	total = 0;
+	if (learned) {
+		/* The counts rise under us; read each once. */
+		for (cpu = 0; cpu <= mp_maxid && i < nrx; cpu++) {
+			weight = in_pcblbgroup_rxcnt(grp, cpu);
+			if (weight == 0)
+				continue;
+			rxcpu[i] = cpu;
+			supply[i] = weight;
+			total += weight;
+			i++;
+		}
+	} else {
+		CPU_FOREACH_ISSET(cpu, &rxset) {
+			rxcpu[i] = cpu;
+			supply[i] = 1;
+			total++;
+			i++;
+		}
+	}
+	MPASS(i == nrx);
+	if (i != nrx || total == 0) {
+		free(supply, M_TEMP);
+		free(map, M_PCB);
+		map = NULL;
+		goto publish;
+	}
+
+	/* Slots per receiving CPU, by weight. */
+	acc = 0;
+	given = 0;
+	for (i = 0; i < nrx; i++) {
+		acc += supply[i];
+		take = (uint32_t)(nslots * acc / total) - given;
+		map->lm_cpu[rxcpu[i]] = (given << 16) | take;
+		fill[i] = given;
+		supply[i] = take;
+		given += take;
+	}
+	MPASS(given == nslots);
+
+	/* Slots owed per member. */
+	for (i = 0; i < nmembers; i++)
+		deficit[i] = (uint16_t)((uint64_t)nslots * (i + 1) / nmembers -
+		    (uint64_t)nslots * i / nmembers);
+
+	in_pcblbgroup_order(grp, order);
+
+	/* Ring levels to walk, then a pass for any member still owed. */
+	nlevels = 1;
+	for (i = 0; i < nrx; i++)
+		while (in_pcblbgroup_ring(rxcpu[i], nlevels) != NULL)
+			nlevels++;
+
+	for (level = 0; level <= nlevels; level++) {
+		for (i = 0; i < nrx; i++) {
+			if (supply[i] == 0)
+				continue;
+			cpu = rxcpu[i];
+			ring = NULL;
+			if (level > 0 && level < nlevels) {
+				ring = in_pcblbgroup_ring(cpu, level);
+				if (ring == NULL)
+					continue;
+			}
+			for (k = 0; k < nmembers && supply[i] > 0; k++) {
+				j = order[k];
+				if (deficit[j] == 0)
+					continue;
+				tag = grp->il_inp[j]->inp_lb_cpu;
+				if (level == 0) {
+					if (tag != cpu)
+						continue;
+				} else if (level < nlevels) {
+					if (tag == INP_LB_CPU_NONE ||
+					    !CPU_ISSET(tag, ring))
+						continue;
+				}
+				take = MIN(deficit[j], supply[i]);
+				deficit[j] -= take;
+				supply[i] -= take;
+				while (take-- > 0)
+					map->lm_slot[fill[i]++] = grp->il_inp[j];
+			}
+		}
+	}
+#ifdef INVARIANTS
+	for (i = 0; i < nrx; i++)
+		MPASS(supply[i] == 0);
+	for (i = 0; i < nmembers; i++)
+		MPASS(deficit[i] == 0);
+#endif
+	free(supply, M_TEMP);
+
+publish:
+	old = grp->il_map;
+	atomic_store_rel_ptr((volatile uintptr_t *)&grp->il_map,
+	    (uintptr_t)map);
+	if (old != NULL)
+		NET_EPOCH_CALL(in_pcblbmap_free_deferred, &old->lm_epoch_ctx);
+}
+
 static struct inpcblbgroup *
 in_pcblbgroup_alloc(struct ucred *cred, u_char vflag, uint16_t port,
     const union in_dependaddr *addr, int size, uint8_t numa_domain, int fib)
@@ -250,10 +479,13 @@ in_pcblbgroup_alloc(struct ucred *cred, u_char vflag, uint16_t port,
 	struct inpcblbgroup *grp;
 	size_t bytes;
 
-	bytes = __offsetof(struct inpcblbgroup, il_inp[size]);
-	grp = malloc(bytes, M_PCB, M_ZERO | M_NOWAIT);
+	bytes = roundup2(__offsetof(struct inpcblbgroup, il_inp[size]),
+	    _Alignof(uint32_t));
+	grp = malloc(bytes + INPCBLB_RXCNT_SIZE, M_PCB, M_ZERO | M_NOWAIT);
 	if (grp == NULL)
 		return (NULL);
+	grp->il_rxcnt = (uint32_t *)((char *)grp + bytes);
+	grp->il_rxtick = ticks;
 	LIST_INIT(&grp->il_pending);
 	grp->il_cred = crhold(cred);
 	grp->il_vflag = vflag;
@@ -272,6 +504,7 @@ in_pcblbgroup_free_deferred(epoch_context_t ctx)
 
 	grp = __containerof(ctx, struct inpcblbgroup, il_epoch_ctx);
 	crfree(grp->il_cred);
+	free(grp->il_map, M_PCB);
 	free(grp, M_PCB);
 }
 
@@ -340,8 +573,11 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		 * don't expose a null slot to the lookup path.
 		 */
 		atomic_store_rel_int(&grp->il_inpcnt, grp->il_inpcnt + 1);
+		in_pcblbgroup_remap(grp);
 	}
 
+	atomic_store_rel_ptr((volatile uintptr_t *)&inp->inp_lbgroup,
+	    (uintptr_t)grp);
 	inp->inp_flags |= INP_INLBGROUP;
 }
 
@@ -350,6 +586,7 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
     struct inpcblbgroup *old_grp, int size)
 {
 	struct inpcblbgroup *grp;
+	struct inpcb *inp;
 	int i;
 
 	INPBUCKET_LOCK_ASSERT(bucket);
@@ -364,12 +601,22 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
 	    ("invalid new local group size %d and old local group count %d",
 	     grp->il_inpsiz, old_grp->il_inpcnt));
 
-	for (i = 0; i < old_grp->il_inpcnt; ++i)
+	for (i = 0; i < old_grp->il_inpcnt; ++i) {
 		grp->il_inp[i] = old_grp->il_inp[i];
+		atomic_store_rel_ptr((volatile uintptr_t *)
+		    &grp->il_inp[i]->inp_lbgroup, (uintptr_t)grp);
+	}
 	grp->il_inpcnt = old_grp->il_inpcnt;
+	memcpy(grp->il_rxcnt, old_grp->il_rxcnt, INPCBLB_RXCNT_SIZE);
+	grp->il_rxwin = old_grp->il_rxwin;
+	grp->il_rxtick = old_grp->il_rxtick;
+	in_pcblbgroup_remap(grp);
 	CK_LIST_INSERT_HEAD(&bucket->head, grp, il_list);
 	LIST_SWAP(&old_grp->il_pending, &grp->il_pending, inpcb,
 	    inp_lbgroup_list);
+	LIST_FOREACH(inp, &grp->il_pending, inp_lbgroup_list)
+		atomic_store_rel_ptr((volatile uintptr_t *)&inp->inp_lbgroup,
+		    (uintptr_t)grp);
 	grp->il_pendcnt = old_grp->il_pendcnt;
 	old_grp->il_pendcnt = 0;
 	in_pcblbgroup_free(old_grp);
@@ -477,6 +724,10 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 			if (grp->il_inp[i] != inp)
 				continue;
 
+			/* Unpublish before the group can be freed. */
+			atomic_store_rel_ptr((volatile uintptr_t *)
+			    &inp->inp_lbgroup, 0);
+			inp->inp_flags &= ~INP_INLBGROUP;
 			if (grp->il_inpcnt == 1 &&
 			    LIST_EMPTY(&grp->il_pending)) {
 				/* We are the last, free this local group. */
@@ -490,20 +741,104 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 				 */
 				atomic_store_rel_int(&grp->il_inpcnt,
 				    grp->il_inpcnt - 1);
+				in_pcblbgroup_remap(grp);
 			}
-			inp->inp_flags &= ~INP_INLBGROUP;
 			return;
 		}
 		LIST_FOREACH(inp1, &grp->il_pending, inp_lbgroup_list) {
 			if (inp == inp1) {
 				LIST_REMOVE(inp, inp_lbgroup_list);
 				grp->il_pendcnt--;
+				atomic_store_rel_ptr((volatile uintptr_t *)
+				    &inp->inp_lbgroup, 0);
 				inp->inp_flags &= ~INP_INLBGROUP;
 				return;
 			}
 		}
 	}
 	__assert_unreachable();
+}
+
+static void
+in_pcblbgroup_count(struct inpcblbgroup *grp, u_int cpu)
+{
+	uint32_t win;
+
+	win = grp->il_rxwin;
+	if ((int)(ticks - grp->il_rxtick) > INPCBLB_RXWINDOW) {
+		win ^= 1;
+		memset(&grp->il_rxcnt[win * (mp_maxid + 1)], 0,
+		    (mp_maxid + 1) * sizeof(uint32_t));
+		grp->il_rxtick = ticks;
+		atomic_store_int(&grp->il_rxwin, win);
+	}
+	atomic_add_int(&grp->il_rxcnt[win * (mp_maxid + 1) + cpu], 1);
+}
+
+/*
+ * No socket locks.  The tag and counts are advisory: a stale read miscounts
+ * one connection at most, and the deal reads them under the bucket lock.
+ */
+void
+in_pcblbgroup_accepted(struct inpcb *inp, struct inpcb *child)
+{
+	struct epoch_tracker et;
+	struct lbgroupbucket *bucket;
+	struct inpcblbgroup *grp;
+	cpuset_t mask;
+	struct thread *td;
+	uint32_t *cnt;
+	u_int cpu, worker;
+
+	if ((atomic_load_int(&inp->inp_flags) & INP_INLBGROUP) == 0)
+		return;
+
+	/* The child is ours alone. */
+	cpu = INP_LB_CPU_NONE;
+	if ((child->inp_lb_flags & INP_LB_RXHASH) != 0)
+		cpu = child->inp_lb_cpu;
+
+	worker = INP_LB_CPU_NONE;
+	if (atomic_load_16(&inp->inp_lb_cpu) == INP_LB_CPU_NONE) {
+		td = curthread;
+		thread_lock(td);
+		CPU_COPY(&td->td_cpuset->cs_mask, &mask);
+		thread_unlock(td);
+		if (CPU_COUNT(&mask) == 1)
+			worker = CPU_FFS(&mask) - 1;
+	}
+
+	if (cpu != INP_LB_CPU_NONE) {
+		NET_EPOCH_ENTER(et);
+		grp = atomic_load_consume_ptr(&inp->inp_lbgroup);
+		if (grp != NULL &&
+		    (int)(ticks - atomic_load_int(&grp->il_rxtick)) <=
+		    INPCBLB_RXWINDOW) {
+			cnt = &grp->il_rxcnt[atomic_load_int(&grp->il_rxwin) *
+			    (mp_maxid + 1) + cpu];
+			if (atomic_load_int(cnt) != 0) {
+				atomic_add_int(cnt, 1);
+				cpu = INP_LB_CPU_NONE;
+			}
+		}
+		NET_EPOCH_EXIT(et);
+	}
+
+	if (cpu == INP_LB_CPU_NONE && worker == INP_LB_CPU_NONE)
+		return;
+
+	INP_WLOCK(inp);
+	grp = in_pcblbgroup_find(inp, &bucket);
+	if (grp != NULL) {
+		if (cpu != INP_LB_CPU_NONE)
+			in_pcblbgroup_count(grp, cpu);
+		if (worker != INP_LB_CPU_NONE &&
+		    inp->inp_lb_cpu == INP_LB_CPU_NONE)
+			atomic_store_16(&inp->inp_lb_cpu, worker);
+		in_pcblbgroup_remap(grp);
+		INPBUCKET_UNLOCK(bucket);
+	}
+	INP_WUNLOCK(inp);
 }
 
 int
@@ -657,6 +992,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo)
 #ifdef NUMA
 	inp->inp_numa_domain = M_NODOM;
 #endif
+	inp->inp_lb_cpu = INP_LB_CPU_NONE;
 	inp->inp_pcbinfo = pcbinfo;
 	inp->inp_socket = so;
 	inp->inp_cred = crhold(so->so_cred);
@@ -2213,8 +2549,6 @@ in_pcblookup_lbgroup(const struct inpcbinfo *pcbinfo,
 	struct lbgroupbucket *bucket;
 	struct inpcblbgroup *grp;
 	struct inpcblbgroup *jail_exact, *jail_wild, *local_exact, *local_wild;
-	struct inpcb *inp;
-	u_int count;
 
 	NET_EPOCH_ASSERT();
 	MPASS(bucketp != NULL || SMR_ENTERED(pcbinfo->ipi_smr));
@@ -2285,12 +2619,8 @@ out:
 	/*
 	 * Synchronize with in_pcblbgroup_insert().
 	 */
-	count = atomic_load_acq_int(&grp->il_inpcnt);
-	if (count == 0)
-		return (NULL);
-	inp = grp->il_inp[INP_PCBLBGROUP_PKTHASH(faddr, lport, fport) % count];
-	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
-	return (inp);
+	return (in_pcblbgroup_select(grp,
+	    INP_PCBLBGROUP_PKTHASH(faddr, lport, fport)));
 }
 
 static bool
@@ -3126,6 +3456,8 @@ in_pcbtoxinpcb(const struct inpcb *inp, struct xinpcb *xi)
 	xi->inp_flow = inp->inp_flow;
 	xi->inp_flowid = inp->inp_flowid;
 	xi->inp_flowtype = inp->inp_flowtype;
+	xi->inp_lb_cpu = inp->inp_lb_cpu == INP_LB_CPU_NONE ? -1 :
+	    inp->inp_lb_cpu;
 	xi->inp_flags = inp->inp_flags;
 	xi->inp_flags2 = inp->inp_flags2;
 	xi->in6p_cksum = inp->in6p_cksum;

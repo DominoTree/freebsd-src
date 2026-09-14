@@ -918,6 +918,10 @@ syncache_socket(struct syncache *sc, struct socket *lso, struct mbuf *m)
 #ifdef NUMA
 	inp->inp_numa_domain = sc->sc_numa_domain;
 #endif
+	inp->inp_lb_cpu = curcpu;
+	if (m != NULL && M_HASHTYPE_ISRSS(m) && m->m_pkthdr.rcvif != NULL &&
+	    (if_getflags(m->m_pkthdr.rcvif) & IFF_LOOPBACK) == 0)
+		inp->inp_lb_flags |= INP_LB_RXHASH;
 
 	tp->t_state = TCPS_SYN_RECEIVED;
 	tp->iss = sc->sc_iss;
