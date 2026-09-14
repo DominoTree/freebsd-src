@@ -31,7 +31,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd June 17, 2026
+.Dd September 13, 2026
 .Dt TCP 4
 .Os
 .Sh NAME
@@ -878,6 +878,36 @@ Maximum size of automatic receive buffer.
 Initial
 .Tn TCP
 receive window (buffer size).
+.It Va reuseport_lb_accept_cpu
+Give a listening socket in a
+.Dv SO_REUSEPORT_LB
+group the receive-CPU affinity of the thread that takes its first connection
+with
+.Xr accept 2 ,
+so that a server which pins each of its workers to a distinct CPU receives
+the connections the stack processes on that CPU without setting
+.Dv SO_REUSEPORT_LB_CPU
+itself.
+A thread that is not pinned to exactly one CPU tags nothing.
+The value selects when a tag is taken:
+0 never,
+1 only for a CPU on which the group has already received a connection whose
+flow the hardware hashed,
+and 2 for any CPU the accepting thread is pinned to.
+The default is 1.
+.Pp
+Captured affinities take effect only once every socket in the group has
+either been given one or has asked for the hash with
+.Dv SO_REUSEPORT_LB_CPU_ANY ,
+so that adding a worker pinned to a CPU which never receives cannot deprive
+it of its share.
+Affinities set with
+.Dv SO_REUSEPORT_LB_CPU
+are always honoured.
+The benefit depends on the stack processing each flow on a consistent CPU,
+which is the case for the default direct
+.Xr netisr 9
+dispatch, and for deferred dispatch only when the netisr threads are bound.
 .It Va retries
 Maximum number of consecutive timer based retransmits sent after a data
 segment is lost (default and maximum is 12).

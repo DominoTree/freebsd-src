@@ -240,6 +240,16 @@ struct xinpgen {
 
 /* Values for inp_lb_cpu. */
 #define	INP_LB_CPU_NONE		0xffff	/* no receive-CPU tag */
+#define	INP_LB_CPU_HASH		0xfffe	/* hashed by request */
+#define	INP_LB_CPU_VALID(c)	((c) < INP_LB_CPU_HASH)
+
+/* Values for inp_lb_flags. */
+#define	INP_LB_AUTO		0x01	/* tag captured at accept(2) */
+
+/* Modes for in_pcblbgroup_accepted(). */
+#define	INP_LB_ACCEPT_OFF	0	/* never capture a tag */
+#define	INP_LB_ACCEPT_SEEN	1	/* only CPUs the group received on */
+#define	INP_LB_ACCEPT_ANY	2	/* any CPU the caller is pinned to */
 
 struct sockopt_parameters {
 	struct in_conninfo sop_inc;
@@ -344,6 +354,7 @@ struct inpcb {
 	int	inp_flags;		/* (i) generic IP/datagram flags */
 	int	inp_flags2;		/* (i) generic IP/datagram flags #2*/
 	uint8_t inp_numa_domain;	/* numa domain */
+	uint8_t inp_lb_flags;		/* (i,h) LB tag flags */
 	uint16_t inp_lb_cpu;		/* (i,h) LB receive-CPU tag */
 	struct	socket *inp_socket;	/* (i) back pointer to socket */
 	struct	inpcbinfo *inp_pcbinfo;	/* (c) PCB list info */
@@ -386,7 +397,7 @@ struct inpcb {
 	};
 	CK_LIST_ENTRY(inpcb) inp_portlist;	/* (r:e/w:h) port list */
 	uint64_t	inp_gencnt;	/* (c) generation count */
-	void		*spare_ptr;	/* Spare pointer. */
+	struct inpcblbgroup *inp_lbgroup;	/* (h) group, or NULL */
 	rt_gen_t	inp_rt_cookie;	/* generation for route entry */
 	union {				/* cached L3 information */
 		struct route inp_route;
@@ -636,8 +647,10 @@ void	in_pcbdisconnect(struct inpcb *);
 void	in_pcbfree(struct inpcb *);
 int	in_pcbladdr(const struct inpcb *, struct in_addr *, struct in_addr *,
 	    struct ucred *);
-int	in_pcblbgroup_cpu(struct inpcb *, int cpu);
+int	in_pcblbgroup_cpu(struct inpcb *, int cpu, bool automatic);
 int	in_pcblbgroup_numa(struct inpcb *, int arg);
+void	in_pcblbgroup_accepted(struct inpcb *, int mode);
+void	in_pcblbgroup_rxcpu(struct inpcb *);
 void	in_pcblisten(struct inpcb *);
 struct inpcb *
 	in_pcblookup(struct inpcbinfo *, struct in_addr, u_int,

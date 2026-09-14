@@ -92,6 +92,7 @@ typedef int	pr_soreceive_t(struct socket *, struct sockaddr **,
 		    struct uio *, struct mbuf **, struct mbuf **, int *);
 typedef int	pr_sopoll_t(struct socket *, int, struct thread *);
 typedef int	pr_kqfilter_t(struct socket *, struct knote *);
+typedef void	pr_accepted_t(struct socket *);
 typedef void	pr_sosetlabel_t(struct socket *);
 typedef void	pr_close_t(struct socket *);
 typedef void	pr_fdclose_t(struct socket *);
@@ -146,6 +147,7 @@ struct protosw {
 /* Cache line #5 */
 	pr_kqfilter_t	*pr_kqfilter;	/* kevent(2) */
 	pr_shutdown_t	*pr_shutdown;	/* shutdown(2) */
+	pr_accepted_t	*pr_accepted;	/* accept(2) took a connection */
 };
 #endif	/* defined(_KERNEL) || defined(_WANT_PROTOSW) */
 #ifdef _KERNEL

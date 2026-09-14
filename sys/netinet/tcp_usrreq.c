@@ -125,6 +125,14 @@ static void	tcp_fill_info(const struct tcpcb *, struct tcp_info *);
 
 static int	tcp_pru_options_support(struct tcpcb *tp, int flags);
 
+VNET_DEFINE_STATIC(int, tcp_reuseport_lb_accept_cpu) = INP_LB_ACCEPT_SEEN;
+#define	V_tcp_reuseport_lb_accept_cpu	VNET(tcp_reuseport_lb_accept_cpu)
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, reuseport_lb_accept_cpu,
+    CTLFLAG_VNET | CTLFLAG_RW, &VNET_NAME(tcp_reuseport_lb_accept_cpu), 0,
+    "Give a SO_REUSEPORT_LB listener the receive-CPU affinity of the thread "
+    "taking its first connection: 0 never, 1 only for CPUs the group has "
+    "received on, 2 for any CPU the thread is pinned to");
+
 static void
 tcp_bblog_pru(struct tcpcb *tp, uint32_t pru, int error)
 {
@@ -454,6 +462,17 @@ out:
 	return (error);
 }
 #endif /* INET6 */
+
+/*
+ * accept(2) has taken a connection from this listener.
+ */
+static void
+tcp_usr_accepted(struct socket *head)
+{
+	if (V_tcp_reuseport_lb_accept_cpu != INP_LB_ACCEPT_OFF)
+		in_pcblbgroup_accepted(sotoinpcb(head),
+		    V_tcp_reuseport_lb_accept_cpu);
+}
 
 #ifdef INET
 /*
@@ -1346,6 +1365,7 @@ out:
 #ifdef INET
 struct protosw tcp_protosw = {
 	.pr_type =		SOCK_STREAM,
+	.pr_accepted =		tcp_usr_accepted,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED | PR_IMPLOPCL | PR_WANTRCVD |
 				    PR_CAPATTACH,
@@ -1375,6 +1395,7 @@ struct protosw tcp_protosw = {
 #ifdef INET6
 struct protosw tcp6_protosw = {
 	.pr_type =		SOCK_STREAM,
+	.pr_accepted =		tcp_usr_accepted,
 	.pr_protocol =		IPPROTO_TCP,
 	.pr_flags =		PR_CONNREQUIRED | PR_IMPLOPCL |PR_WANTRCVD |
 				    PR_CAPATTACH,

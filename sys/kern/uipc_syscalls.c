@@ -371,6 +371,12 @@ kern_accept4(struct thread *td, int s, struct sockaddr *sa, int flags,
 	if (error != 0)
 		goto noconnection;
 
+	if (head->so_proto->pr_accepted != NULL) {
+		CURVNET_SET(head->so_vnet);
+		head->so_proto->pr_accepted(head);
+		CURVNET_RESTORE();
+	}
+
 	/* An extra reference on `nfp' has been held for us by falloc(). */
 	td->td_retval[0] = fd;
 

@@ -1532,7 +1532,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 					break;
 
 				INP_WLOCK(inp);
-				error = in_pcblbgroup_cpu(inp, optval);
+				error = in_pcblbgroup_cpu(inp, optval, false);
 				INP_WUNLOCK(inp);
 				break;
 			case SO_MAX_PACING_RATE:
@@ -1553,8 +1553,8 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 			switch (sopt->sopt_name) {
 			case SO_REUSEPORT_LB_CPU:
 				INP_RLOCK(inp);
-				optval = inp->inp_lb_cpu == INP_LB_CPU_NONE ?
-				    SO_REUSEPORT_LB_CPU_ANY : inp->inp_lb_cpu;
+				optval = INP_LB_CPU_VALID(inp->inp_lb_cpu) ?
+				    inp->inp_lb_cpu : SO_REUSEPORT_LB_CPU_ANY;
 				INP_RUNLOCK(inp);
 				error = sooptcopyout(sopt, &optval,
 				    sizeof(optval));

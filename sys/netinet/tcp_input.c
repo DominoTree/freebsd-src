@@ -1012,6 +1012,9 @@ findpcb:
 	if (tp->t_state == TCPS_LISTEN && SOLISTENING(so)) {
 		struct in_conninfo inc;
 
+		if (M_HASHTYPE_ISRSS(m))
+			in_pcblbgroup_rxcpu(inp);
+
 		bzero(&inc, sizeof(inc));
 #ifdef INET6
 		if (isipv6) {

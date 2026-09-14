@@ -154,6 +154,9 @@ struct inpcblbgroup {
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
 	uint32_t	*il_cpuidx; /* CPU id -> il_inp[] index (h) */
+	uint32_t	il_setcnt;  /* cur count in il_inp[] tagged (h) */
+	uint32_t	il_autocnt; /* cur count tagged by accept(2) (h) */
+	cpuset_t	il_rxcpus;  /* CPUs that delivered to us (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
 
@@ -183,6 +186,8 @@ in_pcblbgroup_select(const struct inpcblbgroup *grp, uint32_t hash)
 	idx = atomic_load_int(&grp->il_cpuidx[cpu]);
 	atomic_thread_fence_acq();
 	if (idx == IL_CPUIDX_NONE)
+		goto hashed;
+	if (grp->il_autocnt != 0 && grp->il_setcnt != count)
 		goto hashed;
 	if ((idx & IL_CPUIDX_SHARED) == 0) {
 		if (idx < count) {

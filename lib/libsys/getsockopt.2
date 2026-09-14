@@ -263,6 +263,20 @@ the processing CPU is only as stable as the receive queue the hardware
 selected, so datagrams of one flow can reach different members; such sockets
 should normally be left with the hashed distribution.
 .Pp
+A TCP socket which has not been given an affinity may acquire one on its own:
+when a thread that is pinned to exactly one CPU takes the socket's first
+connection with
+.Xr accept 2 ,
+the socket is tagged with that CPU.
+Setting the option to any value, including
+.Dv SO_REUSEPORT_LB_CPU_ANY ,
+prevents this and is the way to keep a socket on the hashed distribution.
+See
+.Va net.inet.tcp.reuseport_lb_accept_cpu
+in
+.Xr tcp 4
+for the conditions and for turning it off.
+.Pp
 .Dv SO_KEEPALIVE
 enables the
 periodic transmission of messages on a connected socket.

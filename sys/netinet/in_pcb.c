@@ -296,7 +296,7 @@ in_pcblbgroup_index_set(struct inpcblbgroup *grp, uint16_t cpu)
 {
 	uint32_t i, idx, n;
 
-	if (cpu == INP_LB_CPU_NONE)
+	if (!INP_LB_CPU_VALID(cpu))
 		return;
 	idx = IL_CPUIDX_NONE;
 	for (i = 0, n = 0; i < grp->il_inpcnt; i++) {
@@ -322,12 +322,96 @@ in_pcblbgroup_index_rebuild(struct inpcblbgroup *grp)
 	memset(grp->il_cpuidx, 0xff, (mp_maxid + 1) * sizeof(uint32_t));
 	for (i = 0; i < grp->il_inpcnt; i++) {
 		cpu = grp->il_inp[i]->inp_lb_cpu;
-		if (cpu == INP_LB_CPU_NONE)
+		if (!INP_LB_CPU_VALID(cpu))
 			continue;
 		idx = grp->il_cpuidx[cpu];
 		grp->il_cpuidx[cpu] = idx == IL_CPUIDX_NONE ? i :
 		    ((idx & IL_CPUIDX_MASK) | IL_CPUIDX_SHARED);
 	}
+}
+
+/*
+ * Recompute how many members have decided how they are selected, and how many
+ * of those were tagged by accept(2).  Both gate the lookup and are advisory.
+ */
+static void
+in_pcblbgroup_recount(struct inpcblbgroup *grp)
+{
+	uint32_t autocnt, i, setcnt;
+
+	for (i = 0, autocnt = 0, setcnt = 0; i < grp->il_inpcnt; i++) {
+		if (grp->il_inp[i]->inp_lb_cpu == INP_LB_CPU_NONE)
+			continue;
+		setcnt++;
+		if ((grp->il_inp[i]->inp_lb_flags & INP_LB_AUTO) != 0)
+			autocnt++;
+	}
+	grp->il_setcnt = setcnt;
+	grp->il_autocnt = autocnt;
+}
+
+/*
+ * Tag an untagged group member with the CPU of the thread taking its first
+ * connection, so that a worker which pinned itself before accepting receives
+ * the flows the stack processes on its own CPU without asking for it.  A
+ * caller that is not pinned to exactly one CPU, or is pinned to a CPU the
+ * hardware does not steer to this group, is left on the hash.
+ */
+void
+in_pcblbgroup_accepted(struct inpcb *inp, int mode)
+{
+	struct epoch_tracker et;
+	struct inpcblbgroup *grp;
+	cpuset_t mask;
+	struct thread *td;
+	u_int cpu;
+	bool seen;
+
+	if (atomic_load_16(&inp->inp_lb_cpu) != INP_LB_CPU_NONE)
+		return;
+
+	td = curthread;
+	thread_lock(td);
+	CPU_COPY(&td->td_cpuset->cs_mask, &mask);
+	thread_unlock(td);
+	if (CPU_COUNT(&mask) != 1)
+		return;
+	cpu = CPU_FFS(&mask) - 1;
+
+	if (mode == INP_LB_ACCEPT_SEEN) {
+		NET_EPOCH_ENTER(et);
+		grp = atomic_load_ptr(&inp->inp_lbgroup);
+		seen = grp != NULL && CPU_ISSET(cpu, &grp->il_rxcpus);
+		NET_EPOCH_EXIT(et);
+		if (!seen)
+			return;
+	}
+
+	INP_WLOCK(inp);
+	if (inp->inp_lb_cpu == INP_LB_CPU_NONE &&
+	    (inp->inp_flags & INP_INLBGROUP) != 0)
+		(void)in_pcblbgroup_cpu(inp, cpu, true);
+	INP_WUNLOCK(inp);
+}
+
+/*
+ * Note that the stack delivered a hardware-hashed segment to this group on
+ * the current CPU, so that a worker pinned there may be tagged at accept(2).
+ */
+void
+in_pcblbgroup_rxcpu(struct inpcb *inp)
+{
+	struct inpcblbgroup *grp;
+	u_int cpu;
+
+	NET_EPOCH_ASSERT();
+
+	grp = atomic_load_ptr(&inp->inp_lbgroup);
+	if (grp == NULL)
+		return;
+	cpu = curcpu;
+	if (!CPU_ISSET(cpu, &grp->il_rxcpus))
+		CPU_SET_ATOMIC(cpu, &grp->il_rxcpus);
 }
 
 /*
@@ -378,6 +462,7 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		LIST_INSERT_HEAD(&grp->il_pending, inp, inp_lbgroup_list);
 		grp->il_pendcnt++;
 	} else {
+		inp->inp_lbgroup = grp;
 		grp->il_inp[grp->il_inpcnt] = inp;
 
 		/*
@@ -386,8 +471,10 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		 */
 		atomic_store_rel_int(&grp->il_inpcnt, grp->il_inpcnt + 1);
 		in_pcblbgroup_index_set(grp, inp->inp_lb_cpu);
+		in_pcblbgroup_recount(grp);
 	}
 
+	inp->inp_lbgroup = grp;
 	inp->inp_flags |= INP_INLBGROUP;
 }
 
@@ -396,6 +483,7 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
     struct inpcblbgroup *old_grp, int size)
 {
 	struct inpcblbgroup *grp;
+	struct inpcb *inp;
 	int i;
 
 	INPBUCKET_LOCK_ASSERT(bucket);
@@ -410,13 +498,19 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
 	    ("invalid new local group size %d and old local group count %d",
 	     grp->il_inpsiz, old_grp->il_inpcnt));
 
-	for (i = 0; i < old_grp->il_inpcnt; ++i)
+	for (i = 0; i < old_grp->il_inpcnt; ++i) {
 		grp->il_inp[i] = old_grp->il_inp[i];
+		grp->il_inp[i]->inp_lbgroup = grp;
+	}
 	grp->il_inpcnt = old_grp->il_inpcnt;
+	CPU_COPY(&old_grp->il_rxcpus, &grp->il_rxcpus);
 	in_pcblbgroup_index_rebuild(grp);
+	in_pcblbgroup_recount(grp);
 	CK_LIST_INSERT_HEAD(&bucket->head, grp, il_list);
 	LIST_SWAP(&old_grp->il_pending, &grp->il_pending, inpcb,
 	    inp_lbgroup_list);
+	LIST_FOREACH(inp, &grp->il_pending, inp_lbgroup_list)
+		inp->inp_lbgroup = grp;
 	grp->il_pendcnt = old_grp->il_pendcnt;
 	old_grp->il_pendcnt = 0;
 	in_pcblbgroup_free(old_grp);
@@ -543,7 +637,9 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 				    grp->il_inpcnt - 1);
 				in_pcblbgroup_index_set(grp, inp->inp_lb_cpu);
 				in_pcblbgroup_index_set(grp, moved);
+				in_pcblbgroup_recount(grp);
 			}
+			inp->inp_lbgroup = NULL;
 			inp->inp_flags &= ~INP_INLBGROUP;
 			return;
 		}
@@ -551,6 +647,7 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 			if (inp == inp1) {
 				LIST_REMOVE(inp, inp_lbgroup_list);
 				grp->il_pendcnt--;
+				inp->inp_lbgroup = NULL;
 				inp->inp_flags &= ~INP_INLBGROUP;
 				return;
 			}
@@ -560,7 +657,7 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 }
 
 int
-in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
+in_pcblbgroup_cpu(struct inpcb *inp, int cpu, bool automatic)
 {
 	struct lbgroupbucket *bucket;
 	struct inpcblbgroup *grp;
@@ -570,7 +667,7 @@ in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
 
 	switch (cpu) {
 	case SO_REUSEPORT_LB_CPU_ANY:
-		tag = INP_LB_CPU_NONE;
+		tag = INP_LB_CPU_HASH;
 		break;
 	case SO_REUSEPORT_LB_CPU_CURRENT:
 		tag = curcpu;
@@ -580,6 +677,11 @@ in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
 			return (EINVAL);
 		tag = cpu;
 	}
+
+	if (automatic)
+		inp->inp_lb_flags |= INP_LB_AUTO;
+	else
+		inp->inp_lb_flags &= ~INP_LB_AUTO;
 
 	if ((inp->inp_flags & INP_INLBGROUP) == 0) {
 		atomic_store_16(&inp->inp_lb_cpu, tag);
@@ -595,6 +697,7 @@ in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
 	atomic_store_16(&inp->inp_lb_cpu, tag);
 	in_pcblbgroup_index_set(grp, old);
 	in_pcblbgroup_index_set(grp, tag);
+	in_pcblbgroup_recount(grp);
 	INPBUCKET_UNLOCK(bucket);
 
 	return (0);
