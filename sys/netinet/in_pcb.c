@@ -252,6 +252,12 @@ in_pcblbmap_free_deferred(epoch_context_t ctx)
 }
 
 static uint32_t
+in_pcblbgroup_rxcnt(const struct inpcblbgroup *grp, u_int cpu)
+{
+	return (grp->il_rxcnt[cpu] + grp->il_rxcnt[mp_maxid + 1 + cpu]);
+}
+
+static uint32_t
 in_pcblbgroup_key(const struct inpcblbgroup *grp, uint16_t m)
 {
 	uint16_t tag;
@@ -338,8 +344,10 @@ in_pcblbgroup_remap(struct inpcblbgroup *grp)
 	uint64_t acc, total;
 	size_t msz, ssz;
 	uint32_t given, i, j, k, level, nlevels, nmembers, nrx, nslots, take;
+	uint32_t weight;
 	u_int cpu;
 	uint16_t tag;
+	bool learned;
 
 	map = NULL;
 	nmembers = grp->il_inpcnt;
@@ -347,16 +355,27 @@ in_pcblbgroup_remap(struct inpcblbgroup *grp)
 		goto publish;
 
 	/*
-	 * Until the group has been told which CPUs receive for it, the CPUs
-	 * its members name stand in for them.
+	 * Share the slots among the CPUs the group has received on, in
+	 * proportion to what each of them received.  Until it has received
+	 * anything, the CPUs its members name stand in for them.
 	 */
-	CPU_ZERO(&rxset);
-	for (i = 0; i < nmembers; i++) {
-		tag = grp->il_inp[i]->inp_lb_cpu;
-		if (INP_LB_CPU_VALID(tag))
-			CPU_SET(tag, &rxset);
+	learned = false;
+	nrx = 0;
+	for (cpu = 0; cpu <= mp_maxid; cpu++) {
+		if (in_pcblbgroup_rxcnt(grp, cpu) == 0)
+			continue;
+		learned = true;
+		nrx++;
 	}
-	nrx = CPU_COUNT(&rxset);
+	if (!learned) {
+		CPU_ZERO(&rxset);
+		for (i = 0; i < nmembers; i++) {
+			tag = grp->il_inp[i]->inp_lb_cpu;
+			if (INP_LB_CPU_VALID(tag))
+				CPU_SET(tag, &rxset);
+		}
+		nrx = CPU_COUNT(&rxset);
+	}
 	if (nrx == 0)
 		goto publish;
 
@@ -390,13 +409,38 @@ in_pcblbgroup_remap(struct inpcblbgroup *grp)
 
 	i = 0;
 	total = 0;
-	CPU_FOREACH_ISSET(cpu, &rxset) {
-		rxcpu[i] = cpu;
-		supply[i] = 1;	/* every CPU a member names weighs the same */
-		total += supply[i];
-		i++;
+	if (learned) {
+		/*
+		 * A count can be raised without the bucket lock, so take each
+		 * weight once: totalling a second read would let the shares
+		 * add up to more slots than were allocated.  Which CPUs are
+		 * counted at all changes only under the lock, so the number
+		 * of them does not move here.
+		 */
+		for (cpu = 0; cpu <= mp_maxid && i < nrx; cpu++) {
+			weight = in_pcblbgroup_rxcnt(grp, cpu);
+			if (weight == 0)
+				continue;
+			rxcpu[i] = cpu;
+			supply[i] = weight;
+			total += weight;
+			i++;
+		}
+	} else {
+		CPU_FOREACH_ISSET(cpu, &rxset) {
+			rxcpu[i] = cpu;
+			supply[i] = 1;	/* each named CPU weighs the same */
+			total++;
+			i++;
+		}
 	}
 	MPASS(i == nrx);
+	if (i != nrx || total == 0) {
+		free(supply, M_TEMP);
+		free(map, M_PCB);
+		map = NULL;
+		goto publish;
+	}
 
 	/* Each receiving CPU takes a share of the slots ... */
 	acc = 0;
@@ -478,10 +522,12 @@ in_pcblbgroup_alloc(struct ucred *cred, u_char vflag, uint16_t port,
 	struct inpcblbgroup *grp;
 	size_t bytes;
 
-	bytes = __offsetof(struct inpcblbgroup, il_inp[size]);
-	grp = malloc(bytes, M_PCB, M_ZERO | M_NOWAIT);
+	bytes = roundup2(__offsetof(struct inpcblbgroup, il_inp[size]),
+	    _Alignof(uint32_t));
+	grp = malloc(bytes + INPCBLB_RXCNT_SIZE, M_PCB, M_ZERO | M_NOWAIT);
 	if (grp == NULL)
 		return (NULL);
+	grp->il_rxcnt = (uint32_t *)((char *)grp + bytes);
 	LIST_INIT(&grp->il_pending);
 	grp->il_cred = crhold(cred);
 	grp->il_vflag = vflag;
@@ -572,6 +618,7 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		in_pcblbgroup_remap(grp);
 	}
 
+	inp->inp_lbgroup = grp;
 	inp->inp_flags |= INP_INLBGROUP;
 }
 
@@ -580,6 +627,7 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
     struct inpcblbgroup *old_grp, int size)
 {
 	struct inpcblbgroup *grp;
+	struct inpcb *inp;
 	int i;
 
 	INPBUCKET_LOCK_ASSERT(bucket);
@@ -594,13 +642,20 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
 	    ("invalid new local group size %d and old local group count %d",
 	     grp->il_inpsiz, old_grp->il_inpcnt));
 
-	for (i = 0; i < old_grp->il_inpcnt; ++i)
+	for (i = 0; i < old_grp->il_inpcnt; ++i) {
 		grp->il_inp[i] = old_grp->il_inp[i];
+		grp->il_inp[i]->inp_lbgroup = grp;
+	}
 	grp->il_inpcnt = old_grp->il_inpcnt;
+	memcpy(grp->il_rxcnt, old_grp->il_rxcnt, INPCBLB_RXCNT_SIZE);
+	grp->il_rxwin = old_grp->il_rxwin;
+	grp->il_rxtick = old_grp->il_rxtick;
 	in_pcblbgroup_remap(grp);
 	CK_LIST_INSERT_HEAD(&bucket->head, grp, il_list);
 	LIST_SWAP(&old_grp->il_pending, &grp->il_pending, inpcb,
 	    inp_lbgroup_list);
+	LIST_FOREACH(inp, &grp->il_pending, inp_lbgroup_list)
+		inp->inp_lbgroup = grp;
 	grp->il_pendcnt = old_grp->il_pendcnt;
 	old_grp->il_pendcnt = 0;
 	in_pcblbgroup_free(old_grp);
@@ -723,6 +778,7 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 				    grp->il_inpcnt - 1);
 				in_pcblbgroup_remap(grp);
 			}
+			inp->inp_lbgroup = NULL;
 			inp->inp_flags &= ~INP_INLBGROUP;
 			return;
 		}
@@ -730,12 +786,115 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 			if (inp == inp1) {
 				LIST_REMOVE(inp, inp_lbgroup_list);
 				grp->il_pendcnt--;
+				inp->inp_lbgroup = NULL;
 				inp->inp_flags &= ~INP_INLBGROUP;
 				return;
 			}
 		}
 	}
 	__assert_unreachable();
+}
+
+/*
+ * Count an accept against the CPU that received it, opening a new window
+ * first if the one being counted into has run its course.
+ */
+static void
+in_pcblbgroup_count(struct inpcblbgroup *grp, u_int cpu)
+{
+	uint32_t win;
+
+	win = grp->il_rxwin;
+	if ((int)(ticks - grp->il_rxtick) > INPCBLB_RXWINDOW) {
+		win ^= 1;
+		memset(&grp->il_rxcnt[win * (mp_maxid + 1)], 0,
+		    (mp_maxid + 1) * sizeof(uint32_t));
+		grp->il_rxtick = ticks;
+		atomic_store_int(&grp->il_rxwin, win);
+	}
+	atomic_add_int(&grp->il_rxcnt[win * (mp_maxid + 1) + cpu], 1);
+}
+
+/*
+ * Learn from a connection the application has just taken: which CPU the
+ * hardware had its handshake processed on, and, the first time, which CPU
+ * the thread taking the group's connections runs on.  A worker that pins
+ * itself has said everything needed, so a server that asks for nothing is
+ * served from the right place anyway.
+ *
+ * Called from accept(2) with no socket locks held.  The counters and the
+ * tag are advisory: a stale read only decides whether this one connection
+ * is counted, and the deal that reads them runs under the bucket lock.
+ */
+void
+in_pcblbgroup_accepted(struct inpcb *inp, struct inpcb *child)
+{
+	struct epoch_tracker et;
+	struct lbgroupbucket *bucket;
+	struct inpcblbgroup *grp;
+	cpuset_t mask;
+	struct thread *td;
+	uint32_t *cnt;
+	u_int cpu, worker;
+
+	if ((atomic_load_int(&inp->inp_flags) & INP_INLBGROUP) == 0)
+		return;
+
+	/*
+	 * The child is ours alone here, so its stamps need no atomics.  Only
+	 * a handshake the hardware placed says anything about where the
+	 * group receives; a software hash would just name the CPU that
+	 * happened to run the stack.
+	 */
+	cpu = INP_LB_CPU_NONE;
+	if ((child->inp_lb_flags & INP_LB_RXHASH) != 0)
+		cpu = child->inp_lb_cpu;
+
+	worker = INP_LB_CPU_NONE;
+	if (atomic_load_16(&inp->inp_lb_cpu) == INP_LB_CPU_NONE) {
+		td = curthread;
+		thread_lock(td);
+		CPU_COPY(&td->td_cpuset->cs_mask, &mask);
+		thread_unlock(td);
+		if (CPU_COUNT(&mask) == 1)
+			worker = CPU_FFS(&mask) - 1;
+	}
+
+	/*
+	 * A CPU already counted in the open window needs nothing but the
+	 * count, which is what all but the first few accepts need.
+	 */
+	if (cpu != INP_LB_CPU_NONE) {
+		NET_EPOCH_ENTER(et);
+		grp = atomic_load_consume_ptr(&inp->inp_lbgroup);
+		if (grp != NULL &&
+		    (int)(ticks - atomic_load_int(&grp->il_rxtick)) <=
+		    INPCBLB_RXWINDOW) {
+			cnt = &grp->il_rxcnt[atomic_load_int(&grp->il_rxwin) *
+			    (mp_maxid + 1) + cpu];
+			if (atomic_load_int(cnt) != 0) {
+				atomic_add_int(cnt, 1);
+				cpu = INP_LB_CPU_NONE;
+			}
+		}
+		NET_EPOCH_EXIT(et);
+	}
+
+	if (cpu == INP_LB_CPU_NONE && worker == INP_LB_CPU_NONE)
+		return;
+
+	INP_WLOCK(inp);
+	grp = in_pcblbgroup_find(inp, &bucket);
+	if (grp != NULL) {
+		if (cpu != INP_LB_CPU_NONE)
+			in_pcblbgroup_count(grp, cpu);
+		if (worker != INP_LB_CPU_NONE &&
+		    inp->inp_lb_cpu == INP_LB_CPU_NONE)
+			atomic_store_16(&inp->inp_lb_cpu, worker);
+		in_pcblbgroup_remap(grp);
+		INPBUCKET_UNLOCK(bucket);
+	}
+	INP_WUNLOCK(inp);
 }
 
 int
