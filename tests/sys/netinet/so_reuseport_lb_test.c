@@ -43,6 +43,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -1158,6 +1159,288 @@ ATF_TC_BODY(lb_cpu_partial_claims, tc)
 	}
 }
 
+/*
+ * Helpers for the learning done at accept(2).  The tests below change
+ * net.inet.tcp.reuseport_lb_accept_cpu, so they save the current value in
+ * the work directory and restore it from a cleanup routine.
+ */
+#define	LB_ACCEPT_SYSCTL	"net.inet.tcp.reuseport_lb_accept_cpu"
+#define	LB_ACCEPT_SAVEFILE	"lb_accept_learn"
+
+static void
+lb_accept_learn_set(bool learn)
+{
+	int error;
+
+	error = sysctlbyname(LB_ACCEPT_SYSCTL, NULL, NULL, &learn,
+	    sizeof(learn));
+	ATF_REQUIRE_MSG(error == 0, "sysctl %s=%d failed: %s",
+	    LB_ACCEPT_SYSCTL, (int)learn, strerror(errno));
+}
+
+static void
+lb_accept_learn_save(void)
+{
+	FILE *fp;
+	size_t len;
+	bool learn;
+
+	len = sizeof(learn);
+	ATF_REQUIRE_MSG(sysctlbyname(LB_ACCEPT_SYSCTL, &learn, &len, NULL,
+	    0) == 0, "sysctl %s failed: %s", LB_ACCEPT_SYSCTL,
+	    strerror(errno));
+	fp = fopen(LB_ACCEPT_SAVEFILE, "w");
+	ATF_REQUIRE_MSG(fp != NULL, "fopen() failed: %s", strerror(errno));
+	ATF_REQUIRE(fprintf(fp, "%d\n", (int)learn) > 0);
+	ATF_REQUIRE(fclose(fp) == 0);
+}
+
+static void
+lb_accept_learn_restore(void)
+{
+	FILE *fp;
+	bool learn;
+	int val;
+
+	fp = fopen(LB_ACCEPT_SAVEFILE, "r");
+	if (fp == NULL)
+		return;
+	if (fscanf(fp, "%d", &val) == 1) {
+		learn = val != 0;
+		(void)sysctlbyname(LB_ACCEPT_SYSCTL, NULL, NULL, &learn,
+		    sizeof(learn));
+	}
+	(void)fclose(fp);
+}
+
+/*
+ * Connect to "ss" and accept the connection on one of "nsds" blocking
+ * listeners, returning the index of the one that accepted.
+ */
+static int
+lb_exchange(const struct sockaddr_storage *ss, int sds[], int nsds)
+{
+	struct pollfd *pfd;
+	socklen_t slen;
+	int csd, error, i, n, sd;
+
+	slen = ss->ss_family == AF_INET ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
+	sd = socket(ss->ss_family == AF_INET ? PF_INET : PF_INET6,
+	    SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	error = connect(sd, (const struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "connect() failed: %s", strerror(errno));
+
+	pfd = calloc(nsds, sizeof(*pfd));
+	ATF_REQUIRE_MSG(pfd != NULL, "calloc() failed: %s", strerror(errno));
+	for (i = 0; i < nsds; i++) {
+		pfd[i].fd = sds[i];
+		pfd[i].events = POLLIN;
+	}
+	n = poll(pfd, nsds, 30000);
+	ATF_REQUIRE_MSG(n > 0, "poll() failed or timed out: %d, %s", n,
+	    strerror(errno));
+	for (i = 0; i < nsds; i++)
+		if ((pfd[i].revents & POLLIN) != 0)
+			break;
+	ATF_REQUIRE_MSG(i < nsds, "poll() reported no readable listener");
+	free(pfd);
+
+	csd = accept(sds[i], NULL, NULL);
+	ATF_REQUIRE_MSG(csd >= 0, "accept() failed: %s", strerror(errno));
+	error = close(csd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+	return (i);
+}
+
+/*
+ * A pinned thread accepting on an untagged listener gives it that CPU.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_capture);
+ATF_TC_HEAD(lb_cpu_accept_capture, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(lb_cpu_accept_capture, tc)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, pin, sd;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	pin = ncpu > 1 ? 1 : 0;
+	lb_pin(pin);
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(pin, lb_cpu_get(sd));
+
+	/* A later accept(2) does not move the tag. */
+	lb_pin(0);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(pin, lb_cpu_get(sd));
+
+	/* An explicit request overrides a captured tag. */
+	lb_cpu_set(sd, 0);
+	ATF_REQUIRE_EQ(0, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_capture, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * A thread that is not pinned to exactly one CPU says nothing, so existing
+ * applications keep the distribution they have.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_unpinned);
+ATF_TC_HEAD(lb_cpu_accept_unpinned, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(lb_cpu_accept_unpinned, tc)
+{
+	struct sockaddr_storage ss;
+	int error, sd;
+
+	if (lb_ncpus() == 1)
+		atf_tc_skip("a single CPU is always a pinned thread");
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_unpinned, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Asking for the hash opts a socket out of being given a CPU.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_sticky);
+ATF_TC_HEAD(lb_cpu_accept_sticky, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(lb_cpu_accept_sticky, tc)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, sd;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	lb_pin(ncpu > 1 ? 1 : 0);
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	lb_cpu_set(sd, SO_REUSEPORT_LB_CPU_ANY);
+
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_sticky, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Nothing is learned when the behaviour is turned off.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_off);
+ATF_TC_HEAD(lb_cpu_accept_off, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(lb_cpu_accept_off, tc)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, sd;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(false);
+
+	lb_pin(ncpu > 1 ? 1 : 0);
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_off, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * One listener being given a CPU must not starve the others, however few
+ * CPUs the group is known to receive on.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_no_starve);
+ATF_TC_HEAD(lb_cpu_accept_no_starve, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(lb_cpu_accept_no_starve, tc)
+{
+	struct sockaddr_storage ss;
+	int acceptcnt[2], sds[2];
+	int error, i, n, ncpu, tagged;
+	const int nconns = 256;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	lb_pin(ncpu > 1 ? 1 : 0);
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	sds[1] = lb_bound_socket(PF_INET, SOCK_STREAM, 0,
+	    lb_addr_port(&ss), &ss);
+
+	/* One accept(2) gives a CPU to whichever listener took it. */
+	tagged = lb_exchange(&ss, sds, 2);
+	ATF_REQUIRE_MSG(lb_cpu_get(sds[tagged]) != SO_REUSEPORT_LB_CPU_ANY,
+	    "the accepting listener was given no CPU");
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sds[1 - tagged]));
+
+	acceptcnt[0] = acceptcnt[1] = 0;
+	for (n = 0; n < nconns; n++)
+		acceptcnt[lb_exchange(&ss, sds, 2)]++;
+
+	ATF_REQUIRE_MSG(acceptcnt[1 - tagged] > 0,
+	    "the untagged listener was starved: %d and %d connections",
+	    acceptcnt[0], acceptcnt[1]);
+
+	for (i = 0; i < 2; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+}
+ATF_TC_CLEANUP(lb_cpu_accept_no_starve, tc)
+{
+	lb_accept_learn_restore();
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, basic_ipv4);
@@ -1177,6 +1460,11 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, lb_cpu_duplicates);
 	ATF_TP_ADD_TC(tp, lb_cpu_untagged_share);
 	ATF_TP_ADD_TC(tp, lb_cpu_partial_claims);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_capture);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_unpinned);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_sticky);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_off);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_no_starve);
 
 	return (atf_no_error());
 }
