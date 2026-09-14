@@ -1,4 +1,4 @@
-.Dd September 16, 2026
+.Dd October 12, 2026
 .Dt IFLIB 4
 .Os
 .Sh NAME
@@ -58,6 +58,15 @@ Disables MSI-X interrupts for the device.
 Specifies a starting core offset to assign queues to.
 If the value is unspecified or 65535, cores are assigned sequentially across
 controllers.
+.It Va core_spread
+Assigns queues to cores drawn in turn from each cache group, rather than to
+consecutive cores.
+A controller with fewer queues than the machine has cache groups otherwise
+places every queue in one group, which leaves the cores of the remaining
+groups to reach their data across the slowest link in the machine.
+Only the cores local to the controller are spread over; any others are used
+after them, in the order they would have been used anyway.
+Defaults to zero, which assigns consecutive cores.
 .It Va separate_txrx
 Requests that RX and TX queues not be paired on the same core.
 If this is zero or not set, an RX and TX queue pair will be assigned to each
