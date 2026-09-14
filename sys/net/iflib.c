@@ -215,6 +215,8 @@ struct iflib_ctx {
 	if_t ifc_ifp;
 
 	cpuset_t ifc_cpus;
+	uint16_t *ifc_cpu_order;
+	uint16_t ifc_cpu_count;
 	if_shared_ctx_t ifc_sctx;
 	struct if_softc_ctx ifc_softc_ctx;
 
@@ -258,6 +260,7 @@ struct iflib_ctx {
 #define	CORE_OFFSET_UNSPECIFIED	0xffff
 	uint8_t  ifc_sysctl_separate_txrx;
 	uint8_t  ifc_sysctl_use_logical_cores;
+	uint8_t  ifc_sysctl_core_spread;
 	uint16_t ifc_sysctl_extra_msix_vectors;
 	bool     ifc_cpus_are_physical_cores;
 	bool     ifc_core_offset_ref;
@@ -885,6 +888,8 @@ struct cpu_offset {
 	cpuset_t	set;
 	unsigned int	refcount;
 	uint16_t	next_cpuid;
+	uint16_t	count;
+	uint16_t	*order;
 };
 static struct mtx cpu_offset_mtx;
 MTX_SYSINIT(iflib_cpu_offset, &cpu_offset_mtx, "iflib_cpu_offset lock",
@@ -5398,6 +5403,107 @@ iflib_rem_pfil(if_ctx_t ctx)
 }
 
 
+static int
+cpuset_nth(const cpuset_t *set, int n)
+{
+	int cpu;
+
+	CPU_FOREACH_ISSET(cpu, set)
+		if (n-- == 0)
+			return (cpu);
+	return (-1);
+}
+
+#ifdef SMP
+/* Lowest scheduler group that still covers every CPU in set. */
+static struct cpu_group *
+cpuset_group(const cpuset_t *set)
+{
+	struct cpu_group *cg, *child;
+	int i;
+
+	for (cg = cpu_top; cg != NULL; cg = child) {
+		child = NULL;
+		for (i = 0; i < cg->cg_children; i++)
+			if (CPU_SUBSET(&cg->cg_child[i].cg_mask, set)) {
+				child = &cg->cg_child[i];
+				break;
+			}
+		if (child == NULL)
+			break;
+	}
+	return (cg);
+}
+#endif
+
+/*
+ * Build the order in which queues consume ifc_cpus.  By default that is
+ * ascending CPU id, which fills one cache group before touching the next.
+ * With core_spread the CPUs local to the device are interleaved across the
+ * children of the group that contains them, so that a device with fewer
+ * queues than cache groups still places a queue in each; any CPU outside
+ * the local set follows in ascending order.
+ */
+static void
+iflib_build_cpu_order(if_ctx_t ctx)
+{
+#ifdef SMP
+	cpuset_t local, rest, set;
+	struct cpu_group *cg;
+	int i, round;
+	bool placed;
+#endif
+	int cpu;
+
+	ctx->ifc_cpu_count = 0;
+	ctx->ifc_cpu_order = malloc(CPU_COUNT(&ctx->ifc_cpus) *
+	    sizeof(*ctx->ifc_cpu_order), M_IFLIB, M_WAITOK | M_ZERO);
+
+#ifdef SMP
+	if (ctx->ifc_sysctl_core_spread == 0)
+		goto ascending;
+
+	CPU_COPY(&ctx->ifc_cpus, &set);
+	if (bus_get_cpus(ctx->ifc_dev, LOCAL_CPUS, sizeof(local),
+	    &local) == 0) {
+		CPU_AND(&local, &local, &ctx->ifc_cpus);
+		if (!CPU_EMPTY(&local))
+			CPU_COPY(&local, &set);
+	}
+
+	cg = cpuset_group(&set);
+	if (cg == NULL || cg->cg_children < 2)
+		goto ascending;
+
+	for (round = 0;; round++) {
+		placed = false;
+		for (i = 0; i < cg->cg_children; i++) {
+			CPU_COPY(&cg->cg_child[i].cg_mask, &local);
+			CPU_AND(&local, &local, &set);
+			cpu = cpuset_nth(&local, round);
+			if (cpu == -1)
+				continue;
+			ctx->ifc_cpu_order[ctx->ifc_cpu_count++] = cpu;
+			placed = true;
+		}
+		if (!placed)
+			break;
+	}
+
+	CPU_COPY(&ctx->ifc_cpus, &rest);
+	CPU_ANDNOT(&rest, &rest, &set);
+	CPU_FOREACH_ISSET(cpu, &rest)
+		ctx->ifc_cpu_order[ctx->ifc_cpu_count++] = cpu;
+	MPASS(ctx->ifc_cpu_count == CPU_COUNT(&ctx->ifc_cpus));
+	return;
+
+ascending:
+#endif
+	CPU_FOREACH_ISSET(cpu, &ctx->ifc_cpus)
+		ctx->ifc_cpu_order[ctx->ifc_cpu_count++] = cpu;
+	MPASS(ctx->ifc_cpu_count == CPU_COUNT(&ctx->ifc_cpus));
+}
+
 /*
  * Advance forward by n members of the cpuset ctx->ifc_cpus starting from
  * cpuid and wrapping as necessary.
@@ -5405,8 +5511,7 @@ iflib_rem_pfil(if_ctx_t ctx)
 static unsigned int
 cpuid_advance(if_ctx_t ctx, unsigned int cpuid, unsigned int n)
 {
-	unsigned int first_valid;
-	unsigned int last_valid;
+	unsigned int i, pos;
 
 	/* cpuid should always be in the valid set */
 	MPASS(CPU_ISSET(cpuid, &ctx->ifc_cpus));
@@ -5414,19 +5519,14 @@ cpuid_advance(if_ctx_t ctx, unsigned int cpuid, unsigned int n)
 	/* valid set should never be empty */
 	MPASS(!CPU_EMPTY(&ctx->ifc_cpus));
 
-	first_valid = CPU_FFS(&ctx->ifc_cpus) - 1;
-	last_valid = CPU_FLS(&ctx->ifc_cpus) - 1;
-	n = n % CPU_COUNT(&ctx->ifc_cpus);
-	while (n > 0) {
-		do {
-			cpuid++;
-			if (cpuid > last_valid)
-				cpuid = first_valid;
-		} while (!CPU_ISSET(cpuid, &ctx->ifc_cpus));
-		n--;
-	}
+	MPASS(ctx->ifc_cpu_count > 0);
+	for (pos = 0, i = 0; i < ctx->ifc_cpu_count; i++)
+		if (ctx->ifc_cpu_order[i] == cpuid) {
+			pos = i;
+			break;
+		}
 
-	return (cpuid);
+	return (ctx->ifc_cpu_order[(pos + n) % ctx->ifc_cpu_count]);
 }
 
 /*
@@ -5587,7 +5687,10 @@ get_ctx_core_offset(if_ctx_t ctx)
 
 	mtx_lock(&cpu_offset_mtx);
 	SLIST_FOREACH(op, &cpu_offsets, entries) {
-		if (CPU_CMP(&ctx->ifc_cpus, &op->set) == 0) {
+		if (CPU_CMP(&ctx->ifc_cpus, &op->set) == 0 &&
+		    op->count == ctx->ifc_cpu_count &&
+		    memcmp(op->order, ctx->ifc_cpu_order,
+		    op->count * sizeof(*op->order)) == 0) {
 			base_cpuid = op->next_cpuid;
 			op->next_cpuid = cpuid_advance(ctx, op->next_cpuid,
 			    cores_consumed);
@@ -5601,10 +5704,21 @@ get_ctx_core_offset(if_ctx_t ctx)
 		base_cpuid = first_valid;
 		op = malloc(sizeof(struct cpu_offset), M_IFLIB,
 		    M_NOWAIT | M_ZERO);
+		if (op != NULL) {
+			op->count = ctx->ifc_cpu_count;
+			op->order = malloc(op->count * sizeof(*op->order),
+			    M_IFLIB, M_NOWAIT);
+			if (op->order == NULL) {
+				free(op, M_IFLIB);
+				op = NULL;
+			}
+		}
 		if (op == NULL) {
 			device_printf(ctx->ifc_dev,
 			    "allocation for cpu offset failed.\n");
 		} else {
+			memcpy(op->order, ctx->ifc_cpu_order,
+			    op->count * sizeof(*op->order));
 			op->next_cpuid = cpuid_advance(ctx, base_cpuid,
 			    cores_consumed);
 			op->refcount = 1;
@@ -5628,11 +5742,15 @@ unref_ctx_core_offset(if_ctx_t ctx)
 
 	mtx_lock(&cpu_offset_mtx);
 	SLIST_FOREACH_SAFE(op, &cpu_offsets, entries, top) {
-		if (CPU_CMP(&ctx->ifc_cpus, &op->set) == 0) {
+		if (CPU_CMP(&ctx->ifc_cpus, &op->set) == 0 &&
+		    op->count == ctx->ifc_cpu_count &&
+		    memcmp(op->order, ctx->ifc_cpu_order,
+		    op->count * sizeof(*op->order)) == 0) {
 			MPASS(op->refcount > 0);
 			op->refcount--;
 			if (op->refcount == 0) {
 				SLIST_REMOVE(&cpu_offsets, op, cpu_offset, entries);
+				free(op->order, M_IFLIB);
 				free(op, M_IFLIB);
 			}
 			ctx->ifc_core_offset_ref = false;
@@ -5830,6 +5948,7 @@ iflib_device_register(device_t dev, void *sc, if_shared_ctx_t sctx, if_ctx_t *ct
 	} else
 		ctx->ifc_cpus_are_physical_cores = true;
 	MPASS(CPU_COUNT(&ctx->ifc_cpus) > 0);
+	iflib_build_cpu_order(ctx);
 
 	/*
 	 * Now set up MSI or MSI-X, should return us the number of supported
@@ -6047,6 +6166,7 @@ fail_cleanup_detaching:
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
 		free(ctx->ifc_softc, M_IFLIB);
 	unref_ctx_core_offset(ctx);
+	free(ctx->ifc_cpu_order, M_IFLIB);
 	free(ctx, M_IFLIB);
 	return (err);
 }
@@ -6151,6 +6271,7 @@ iflib_device_deregister(if_ctx_t ctx)
 	if (ctx->ifc_flags & IFC_SC_ALLOCATED)
 		free(ctx->ifc_softc, M_IFLIB);
 	unref_ctx_core_offset(ctx);
+	free(ctx->ifc_cpu_order, M_IFLIB);
 	free(ctx, M_IFLIB);
 	return (0);
 }
@@ -7798,6 +7919,9 @@ iflib_add_device_sysctl_pre(if_ctx_t ctx)
 	SYSCTL_ADD_U8(&ctx->ifc_sysctl_ctx, oid_list, OID_AUTO, "use_logical_cores",
 	    CTLFLAG_RDTUN, &ctx->ifc_sysctl_use_logical_cores, 0,
 	    "try to make use of logical cores for TX and RX");
+	SYSCTL_ADD_U8(&ctx->ifc_sysctl_ctx, oid_list, OID_AUTO, "core_spread",
+	    CTLFLAG_RDTUN, &ctx->ifc_sysctl_core_spread, 0,
+	    "spread queues across cache groups rather than filling one");
 	SYSCTL_ADD_U16(&ctx->ifc_sysctl_ctx, oid_list, OID_AUTO, "use_extra_msix_vectors",
 	    CTLFLAG_RDTUN, &ctx->ifc_sysctl_extra_msix_vectors, 0,
 	    "attempt to reserve the given number of extra MSI-X vectors during driver load for the creation of additional interfaces later");
