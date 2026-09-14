@@ -133,6 +133,29 @@ struct inpcblbgroup *in_pcblbgroup_find(struct inpcb *inp,
 	    struct lbgroupbucket **bucket);
 
 /*
+ * How many map slots each member of a load balance group is dealt, which
+ * sets how finely the load can be divided between them, and the point at
+ * which a very large group stops being divided any more finely.
+ */
+#define	INPCBLB_SLOTS		16
+#define	INPCBLB_SLOTS_MAX	4096
+
+/*
+ * A load balance group's selection map.  Each CPU that receives for the
+ * group owns a run of slots, and each slot names the member that serves it,
+ * so that selection is two loads and the members nearest a CPU are the ones
+ * it hands connections to.  A map is immutable once published: it is built
+ * under the group's bucket lock, swapped in, and freed once no lookup can
+ * still be holding it.
+ */
+struct inpcblbmap {
+	struct epoch_context lm_epoch_ctx;
+	uint32_t	lm_nslots;
+	uint32_t	*lm_cpu;	/* per CPU, offset << 16 | count */
+	struct inpcb	**lm_slot;	/* lm_nslots members */
+};
+
+/*
  * Load balance groups used for the SO_REUSEPORT_LB socket option. Each group
  * (or unique address:port combination) can be re-used at most
  * INPCBLBGROUP_SIZMAX (256) times. The inpcbs are stored in il_inp which
@@ -153,7 +176,47 @@ struct inpcblbgroup {
 	uint32_t	il_inpsiz; /* max count in il_inp[] (h) */
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
+	struct inpcblbmap *il_map; /* selection map, or NULL (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
+
+/*
+ * Select a group member for a packet the stack is processing on the current
+ * CPU.  The map, when there is one, names the members nearest to this CPU;
+ * everything else is distributed by the packet hash as it has always been.
+ * Never returns NULL for a non-empty group, as the caller reads NULL as "no
+ * group" and would fall through to the wildcard hash.
+ */
+static inline struct inpcb *
+in_pcblbgroup_select(const struct inpcblbgroup *grp, uint32_t hash)
+{
+	const struct inpcblbmap *map;
+	struct inpcb *inp;
+	uint32_t count, entry, n;
+
+	count = atomic_load_acq_int(&grp->il_inpcnt);
+	if (count == 0)
+		return (NULL);
+
+	map = atomic_load_consume_ptr(&grp->il_map);
+	if (map != NULL) {
+		entry = map->lm_cpu[curcpu];
+		n = entry & 0xffff;
+		if (n != 0) {
+			/* The ports are in the low bits; scaling uses the high. */
+			hash ^= hash >> 16;
+			hash *= 0x85ebca6b;
+			hash ^= hash >> 13;
+			hash *= 0xc2b2ae35;
+			hash ^= hash >> 16;
+			return (map->lm_slot[(entry >> 16) +
+			    (uint32_t)(((uint64_t)hash * n) >> 32)]);
+		}
+	}
+
+	inp = grp->il_inp[hash % count];
+	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
+	return (inp);
+}
 
 #endif /* !_NETINET_IN_PCB_VAR_H_ */
