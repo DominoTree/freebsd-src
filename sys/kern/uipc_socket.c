@@ -3953,6 +3953,7 @@ stdopt:
 			goto stdopt;
 
 		case SO_SETFIB:
+		case SO_REUSEPORT_LB_CPU:
 			error = so->so_proto->pr_ctloutput(so, sopt);
 			break;
 
@@ -4341,6 +4342,10 @@ integer:
 		case SO_MAX_PACING_RATE:
 			optval = so->so_max_pacing_rate;
 			goto integer;
+
+		case SO_REUSEPORT_LB_CPU:
+			error = so->so_proto->pr_ctloutput(so, sopt);
+			break;
 
 		case SO_SPLICE: {
 			off_t n;
