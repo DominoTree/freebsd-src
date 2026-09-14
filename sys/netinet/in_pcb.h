@@ -238,6 +238,9 @@ struct xinpgen {
     "\22INP_2PCP_SET\23INP_2PCP_BIT0\24INP_2PCP_BIT1" \
     "\25INP_2PCP_BIT2"
 
+/* Values for inp_lb_cpu. */
+#define	INP_LB_CPU_NONE		0xffff	/* no receive-CPU tag */
+
 struct sockopt_parameters {
 	struct in_conninfo sop_inc;
 	uint64_t sop_id;
@@ -341,6 +344,7 @@ struct inpcb {
 	int	inp_flags;		/* (i) generic IP/datagram flags */
 	int	inp_flags2;		/* (i) generic IP/datagram flags #2*/
 	uint8_t inp_numa_domain;	/* numa domain */
+	uint16_t inp_lb_cpu;		/* (i,h) LB receive-CPU tag */
 	struct	socket *inp_socket;	/* (i) back pointer to socket */
 	struct	inpcbinfo *inp_pcbinfo;	/* (c) PCB list info */
 	struct	ucred	*inp_cred;	/* (c) cache of socket cred */
@@ -632,6 +636,7 @@ void	in_pcbdisconnect(struct inpcb *);
 void	in_pcbfree(struct inpcb *);
 int	in_pcbladdr(const struct inpcb *, struct in_addr *, struct in_addr *,
 	    struct ucred *);
+int	in_pcblbgroup_cpu(struct inpcb *, int cpu);
 int	in_pcblbgroup_numa(struct inpcb *, int arg);
 void	in_pcblisten(struct inpcb *);
 struct inpcb *

@@ -153,7 +153,60 @@ struct inpcblbgroup {
 	uint32_t	il_inpsiz; /* max count in il_inp[] (h) */
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
+	uint32_t	*il_cpuidx; /* CPU id -> il_inp[] index (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
+
+/* Values in il_cpuidx[]. */
+#define	IL_CPUIDX_NONE		0xffffffff
+#define	IL_CPUIDX_SHARED	0x80000000
+#define	IL_CPUIDX_MASK		0x7fffffff
+
+/*
+ * Select a group member for a packet being processed on the current CPU.
+ * Members tagged with that CPU are preferred; anything else uses the packet
+ * hash.  Never returns NULL for a non-empty group, as the caller reads NULL
+ * as "no group" and falls back to the wildcard hash.
+ */
+static inline struct inpcb *
+in_pcblbgroup_select(const struct inpcblbgroup *grp, uint32_t hash)
+{
+	struct inpcb *inp;
+	uint32_t count, i, idx;
+	u_int cpu;
+
+	count = atomic_load_acq_int(&grp->il_inpcnt);
+	if (count == 0)
+		return (NULL);
+
+	cpu = curcpu;
+	idx = atomic_load_int(&grp->il_cpuidx[cpu]);
+	atomic_thread_fence_acq();
+	if (idx == IL_CPUIDX_NONE)
+		goto hashed;
+	if ((idx & IL_CPUIDX_SHARED) == 0) {
+		if (idx < count) {
+			inp = grp->il_inp[idx];
+			if (atomic_load_16(&inp->inp_lb_cpu) == cpu)
+				return (inp);
+		}
+		goto hashed;
+	}
+
+	/* Several members claim this CPU, so share them by hash. */
+	idx = hash % count;
+	for (i = 0; i < count; i++) {
+		inp = grp->il_inp[idx];
+		if (atomic_load_16(&inp->inp_lb_cpu) == cpu)
+			return (inp);
+		if (++idx == count)
+			idx = 0;
+	}
+
+hashed:
+	inp = grp->il_inp[hash % count];
+	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
+	return (inp);
+}
 
 #endif /* !_NETINET_IN_PCB_VAR_H_ */

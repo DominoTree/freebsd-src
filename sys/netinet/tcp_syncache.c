@@ -918,6 +918,7 @@ syncache_socket(struct syncache *sc, struct socket *lso, struct mbuf *m)
 #ifdef NUMA
 	inp->inp_numa_domain = sc->sc_numa_domain;
 #endif
+	inp->inp_lb_cpu = curcpu;
 
 	tp->t_state = TCPS_SYN_RECEIVED;
 	tp->iss = sc->sc_iss;

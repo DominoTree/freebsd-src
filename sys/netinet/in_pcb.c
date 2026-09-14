@@ -246,12 +246,16 @@ in_pcblbgroup_alloc(struct ucred *cred, u_char vflag, uint16_t port,
     const union in_dependaddr *addr, int size, uint8_t numa_domain, int fib)
 {
 	struct inpcblbgroup *grp;
-	size_t bytes;
+	size_t bytes, cpusz;
 
-	bytes = __offsetof(struct inpcblbgroup, il_inp[size]);
-	grp = malloc(bytes, M_PCB, M_ZERO | M_NOWAIT);
+	bytes = roundup2(__offsetof(struct inpcblbgroup, il_inp[size]),
+	    _Alignof(uint32_t));
+	cpusz = (mp_maxid + 1) * sizeof(uint32_t);
+	grp = malloc(bytes + cpusz, M_PCB, M_ZERO | M_NOWAIT);
 	if (grp == NULL)
 		return (NULL);
+	grp->il_cpuidx = (uint32_t *)((char *)grp + bytes);
+	memset(grp->il_cpuidx, 0xff, cpusz);
 	LIST_INIT(&grp->il_pending);
 	grp->il_cred = crhold(cred);
 	grp->il_vflag = vflag;
@@ -281,6 +285,49 @@ in_pcblbgroup_free(struct inpcblbgroup *grp)
 
 	CK_LIST_REMOVE(grp, il_list);
 	NET_EPOCH_CALL(in_pcblbgroup_free_deferred, &grp->il_epoch_ctx);
+}
+
+/*
+ * Recompute the il_cpuidx[] entry for one CPU from the current membership.
+ * The group is visible to lookups, so the entry is published last.
+ */
+static void
+in_pcblbgroup_index_set(struct inpcblbgroup *grp, uint16_t cpu)
+{
+	uint32_t i, idx, n;
+
+	if (cpu == INP_LB_CPU_NONE)
+		return;
+	idx = IL_CPUIDX_NONE;
+	for (i = 0, n = 0; i < grp->il_inpcnt; i++) {
+		if (grp->il_inp[i]->inp_lb_cpu != cpu)
+			continue;
+		if (n++ == 0)
+			idx = i;
+	}
+	if (n > 1)
+		idx |= IL_CPUIDX_SHARED;
+	atomic_store_rel_int(&grp->il_cpuidx[cpu], idx);
+}
+
+/*
+ * Build il_cpuidx[] for a group that is not published yet.
+ */
+static void
+in_pcblbgroup_index_rebuild(struct inpcblbgroup *grp)
+{
+	uint32_t i, idx;
+	uint16_t cpu;
+
+	memset(grp->il_cpuidx, 0xff, (mp_maxid + 1) * sizeof(uint32_t));
+	for (i = 0; i < grp->il_inpcnt; i++) {
+		cpu = grp->il_inp[i]->inp_lb_cpu;
+		if (cpu == INP_LB_CPU_NONE)
+			continue;
+		idx = grp->il_cpuidx[cpu];
+		grp->il_cpuidx[cpu] = idx == IL_CPUIDX_NONE ? i :
+		    ((idx & IL_CPUIDX_MASK) | IL_CPUIDX_SHARED);
+	}
 }
 
 /*
@@ -338,6 +385,7 @@ in_pcblbgroup_insert(struct inpcblbgroup *grp, struct inpcb *inp)
 		 * don't expose a null slot to the lookup path.
 		 */
 		atomic_store_rel_int(&grp->il_inpcnt, grp->il_inpcnt + 1);
+		in_pcblbgroup_index_set(grp, inp->inp_lb_cpu);
 	}
 
 	inp->inp_flags |= INP_INLBGROUP;
@@ -365,6 +413,7 @@ in_pcblbgroup_resize(struct lbgroupbucket *bucket,
 	for (i = 0; i < old_grp->il_inpcnt; ++i)
 		grp->il_inp[i] = old_grp->il_inp[i];
 	grp->il_inpcnt = old_grp->il_inpcnt;
+	in_pcblbgroup_index_rebuild(grp);
 	CK_LIST_INSERT_HEAD(&bucket->head, grp, il_list);
 	LIST_SWAP(&old_grp->il_pending, &grp->il_pending, inpcb,
 	    inp_lbgroup_list);
@@ -480,6 +529,10 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 				/* We are the last, free this local group. */
 				in_pcblbgroup_free(grp);
 			} else {
+				uint16_t moved;
+
+				moved = grp->il_inp[grp->il_inpcnt - 1]->
+				    inp_lb_cpu;
 				grp->il_inp[i] =
 				    grp->il_inp[grp->il_inpcnt - 1];
 
@@ -488,6 +541,8 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 				 */
 				atomic_store_rel_int(&grp->il_inpcnt,
 				    grp->il_inpcnt - 1);
+				in_pcblbgroup_index_set(grp, inp->inp_lb_cpu);
+				in_pcblbgroup_index_set(grp, moved);
 			}
 			inp->inp_flags &= ~INP_INLBGROUP;
 			return;
@@ -502,6 +557,47 @@ in_pcbremlbgrouphash(struct lbgroupbucket *bucket, struct inpcb *inp)
 		}
 	}
 	__assert_unreachable();
+}
+
+int
+in_pcblbgroup_cpu(struct inpcb *inp, int cpu)
+{
+	struct lbgroupbucket *bucket;
+	struct inpcblbgroup *grp;
+	uint16_t old, tag;
+
+	INP_WLOCK_ASSERT(inp);
+
+	switch (cpu) {
+	case SO_REUSEPORT_LB_CPU_ANY:
+		tag = INP_LB_CPU_NONE;
+		break;
+	case SO_REUSEPORT_LB_CPU_CURRENT:
+		tag = curcpu;
+		break;
+	default:
+		if (cpu < 0 || cpu > mp_maxid || CPU_ABSENT(cpu))
+			return (EINVAL);
+		tag = cpu;
+	}
+
+	if ((inp->inp_flags & INP_INLBGROUP) == 0) {
+		atomic_store_16(&inp->inp_lb_cpu, tag);
+		return (0);
+	}
+
+	grp = in_pcblbgroup_find(inp, &bucket);
+	if (grp == NULL) {
+		atomic_store_16(&inp->inp_lb_cpu, tag);
+		return (0);
+	}
+	old = inp->inp_lb_cpu;
+	atomic_store_16(&inp->inp_lb_cpu, tag);
+	in_pcblbgroup_index_set(grp, old);
+	in_pcblbgroup_index_set(grp, tag);
+	INPBUCKET_UNLOCK(bucket);
+
+	return (0);
 }
 
 int
@@ -655,6 +751,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo)
 #ifdef NUMA
 	inp->inp_numa_domain = M_NODOM;
 #endif
+	inp->inp_lb_cpu = INP_LB_CPU_NONE;
 	inp->inp_pcbinfo = pcbinfo;
 	inp->inp_socket = so;
 	inp->inp_cred = crhold(so->so_cred);
@@ -2211,8 +2308,6 @@ in_pcblookup_lbgroup(const struct inpcbinfo *pcbinfo,
 	struct lbgroupbucket *bucket;
 	struct inpcblbgroup *grp;
 	struct inpcblbgroup *jail_exact, *jail_wild, *local_exact, *local_wild;
-	struct inpcb *inp;
-	u_int count;
 
 	NET_EPOCH_ASSERT();
 	MPASS(bucketp != NULL || SMR_ENTERED(pcbinfo->ipi_smr));
@@ -2283,12 +2378,8 @@ out:
 	/*
 	 * Synchronize with in_pcblbgroup_insert().
 	 */
-	count = atomic_load_acq_int(&grp->il_inpcnt);
-	if (count == 0)
-		return (NULL);
-	inp = grp->il_inp[INP_PCBLBGROUP_PKTHASH(faddr, lport, fport) % count];
-	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
-	return (inp);
+	return (in_pcblbgroup_select(grp,
+	    INP_PCBLBGROUP_PKTHASH(faddr, lport, fport)));
 }
 
 static bool

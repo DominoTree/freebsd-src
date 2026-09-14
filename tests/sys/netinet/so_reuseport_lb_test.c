@@ -28,10 +28,12 @@
  */
 
 #include <sys/param.h>
+#include <sys/cpuset.h>
 #include <sys/event.h>
 #include <sys/filio.h>
 #include <sys/ioccom.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -702,6 +704,366 @@ ATF_TC_BODY(connect_udp6, tc)
 	ATF_REQUIRE_MSG(len == 1, "expected data available");
 }
 
+/*
+ * Helpers for the SO_REUSEPORT_LB_CPU receive-CPU tag.
+ */
+static int
+lb_cpu_get(int sd)
+{
+	socklen_t slen;
+	int cpu, error;
+
+	slen = sizeof(cpu);
+	error = getsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB_CPU, &cpu, &slen);
+	ATF_REQUIRE_MSG(error == 0,
+	    "getsockopt(SO_REUSEPORT_LB_CPU) failed: %s", strerror(errno));
+	ATF_REQUIRE_MSG(slen == sizeof(cpu), "option size changed");
+	return (cpu);
+}
+
+static void
+lb_cpu_set(int sd, int cpu)
+{
+	int error;
+
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB_CPU, &cpu,
+	    sizeof(cpu));
+	ATF_REQUIRE_MSG(error == 0,
+	    "setsockopt(SO_REUSEPORT_LB_CPU, %d) failed: %s", cpu,
+	    strerror(errno));
+}
+
+/*
+ * Return the CPU count, skipping the test if CPU IDs are not dense, as the
+ * tests below tag listener i with CPU i.
+ */
+static int
+lb_ncpus(void)
+{
+	size_t len;
+	int maxid, ncpu;
+
+	len = sizeof(ncpu);
+	ATF_REQUIRE_MSG(sysctlbyname("hw.ncpu", &ncpu, &len, NULL, 0) == 0,
+	    "sysctl hw.ncpu failed: %s", strerror(errno));
+	len = sizeof(maxid);
+	ATF_REQUIRE_MSG(sysctlbyname("kern.smp.maxid", &maxid, &len, NULL,
+	    0) == 0, "sysctl kern.smp.maxid failed: %s", strerror(errno));
+	if (ncpu != maxid + 1)
+		atf_tc_skip("CPU IDs are not dense");
+	return (ncpu);
+}
+
+static void
+lb_pin(int cpu)
+{
+	cpuset_t set;
+	int error;
+
+	CPU_ZERO(&set);
+	CPU_SET(cpu, &set);
+	error = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1,
+	    sizeof(set), &set);
+	ATF_REQUIRE_MSG(error == 0, "cpuset_setaffinity() failed: %s",
+	    strerror(errno));
+}
+
+static socklen_t
+lb_loopback_addr(int domain, uint16_t port, struct sockaddr_storage *ss)
+{
+	struct sockaddr_in *sin;
+	struct sockaddr_in6 *sin6;
+
+	memset(ss, 0, sizeof(*ss));
+	if (domain == PF_INET) {
+		sin = (struct sockaddr_in *)ss;
+		sin->sin_len = sizeof(*sin);
+		sin->sin_family = AF_INET;
+		sin->sin_port = port;
+		sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		return (sizeof(*sin));
+	}
+	sin6 = (struct sockaddr_in6 *)ss;
+	sin6->sin6_len = sizeof(*sin6);
+	sin6->sin6_family = AF_INET6;
+	sin6->sin6_port = port;
+	sin6->sin6_addr = in6addr_loopback;
+	return (sizeof(*sin6));
+}
+
+static int
+lb_bound_socket(int domain, int type, int flags, uint16_t port,
+    struct sockaddr_storage *ss)
+{
+	socklen_t slen;
+	int error, one, sd;
+
+	sd = socket(domain, type | flags, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	one = 1;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB, &one, sizeof(one));
+	ATF_REQUIRE_MSG(error == 0, "setsockopt(SO_REUSEPORT_LB) failed: %s",
+	    strerror(errno));
+	if (domain == PF_INET6) {
+		error = setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, &one,
+		    sizeof(one));
+		ATF_REQUIRE_MSG(error == 0,
+		    "setsockopt(IPV6_V6ONLY) failed: %s", strerror(errno));
+	}
+
+	slen = lb_loopback_addr(domain, port, ss);
+	error = bind(sd, (struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "bind() failed: %s", strerror(errno));
+	if (type == SOCK_STREAM) {
+		error = listen(sd, 32);
+		ATF_REQUIRE_MSG(error == 0, "listen() failed: %s",
+		    strerror(errno));
+	}
+	if (port == 0) {
+		slen = sizeof(*ss);
+		error = getsockname(sd, (struct sockaddr *)ss, &slen);
+		ATF_REQUIRE_MSG(error == 0, "getsockname() failed: %s",
+		    strerror(errno));
+	}
+	return (sd);
+}
+
+static uint16_t
+lb_addr_port(const struct sockaddr_storage *ss)
+{
+	if (ss->ss_family == AF_INET)
+		return (((const struct sockaddr_in *)ss)->sin_port);
+	return (((const struct sockaddr_in6 *)ss)->sin6_port);
+}
+
+static void
+lb_cpu_readback(int domain, int type)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, pin, sd, val;
+
+	ncpu = lb_ncpus();
+
+	sd = socket(domain, type, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	val = 1;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB, &val, sizeof(val));
+	ATF_REQUIRE_MSG(error == 0, "setsockopt(SO_REUSEPORT_LB) failed: %s",
+	    strerror(errno));
+
+	/* A socket has no affinity until one is requested. */
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	/* The option may be set before the socket joins a group. */
+	lb_cpu_set(sd, 0);
+	ATF_REQUIRE_EQ(0, lb_cpu_get(sd));
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+
+	/* ... and on a socket that is already a group member. */
+	sd = lb_bound_socket(domain, type, 0, 0, &ss);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+	lb_cpu_set(sd, ncpu - 1);
+	ATF_REQUIRE_EQ(ncpu - 1, lb_cpu_get(sd));
+
+	/* CURRENT resolves to the calling thread's CPU. */
+	pin = ncpu > 1 ? 1 : 0;
+	lb_pin(pin);
+	lb_cpu_set(sd, SO_REUSEPORT_LB_CPU_CURRENT);
+	ATF_REQUIRE_EQ(pin, lb_cpu_get(sd));
+
+	/* ANY restores hashed selection. */
+	lb_cpu_set(sd, SO_REUSEPORT_LB_CPU_ANY);
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	/* Out of range CPU IDs are rejected. */
+	val = ncpu;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB_CPU, &val,
+	    sizeof(val));
+	ATF_REQUIRE_MSG(error == -1 && errno == EINVAL,
+	    "expected EINVAL for CPU %d, got %d/%d", val, error, errno);
+	val = -3;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB_CPU, &val,
+	    sizeof(val));
+	ATF_REQUIRE_MSG(error == -1 && errno == EINVAL,
+	    "expected EINVAL for CPU %d, got %d/%d", val, error, errno);
+
+	/* So is a short option value. */
+	val = 0;
+	error = setsockopt(sd, SOL_SOCKET, SO_REUSEPORT_LB_CPU, &val,
+	    sizeof(char));
+	ATF_REQUIRE_MSG(error == -1 && errno == EINVAL,
+	    "expected EINVAL for a short optval, got %d/%d", error, errno);
+
+	/* None of the failures changed the socket. */
+	ATF_REQUIRE_EQ(SO_REUSEPORT_LB_CPU_ANY, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+
+ATF_TC_WITHOUT_HEAD(lb_cpu_readback_ipv4);
+ATF_TC_BODY(lb_cpu_readback_ipv4, tc)
+{
+	lb_cpu_readback(PF_INET, SOCK_STREAM);
+}
+
+ATF_TC_WITHOUT_HEAD(lb_cpu_readback_ipv6);
+ATF_TC_BODY(lb_cpu_readback_ipv6, tc)
+{
+	lb_cpu_readback(PF_INET6, SOCK_STREAM);
+}
+
+ATF_TC_WITHOUT_HEAD(lb_cpu_readback_udp);
+ATF_TC_BODY(lb_cpu_readback_udp, tc)
+{
+	lb_cpu_readback(PF_INET, SOCK_DGRAM);
+}
+
+/*
+ * Connect once and return the index of the listening socket that accepted,
+ * storing the accepted socket's receive CPU in *cpup.
+ */
+static int
+lb_connect_once(int domain, const struct sockaddr_storage *ss, int sds[],
+    int nsds, int *cpup)
+{
+	const struct linger lopt = { 1, 0 };
+	socklen_t slen;
+	int csd, error, i, sd;
+
+	slen = ss->ss_family == AF_INET ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
+	sd = socket(domain, SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	error = connect(sd, (const struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "connect() failed: %s", strerror(errno));
+	error = setsockopt(sd, SOL_SOCKET, SO_LINGER, &lopt, sizeof(lopt));
+	ATF_REQUIRE_MSG(error == 0, "Setting linger failed: %s",
+	    strerror(errno));
+
+	for (;;) {
+		for (i = 0; i < nsds; i++) {
+			csd = accept(sds[i], NULL, NULL);
+			if (csd < 0) {
+				ATF_REQUIRE_MSG(errno == EWOULDBLOCK ||
+				    errno == EAGAIN, "accept() failed: %s",
+				    strerror(errno));
+				continue;
+			}
+			*cpup = lb_cpu_get(csd);
+			error = close(csd);
+			ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+			    strerror(errno));
+			error = close(sd);
+			ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+			    strerror(errno));
+			return (i);
+		}
+	}
+}
+
+/*
+ * With one listener tagged for each CPU, a connection whose SYN the stack
+ * processed on CPU c must be accepted by listener c.
+ */
+ATF_TC_WITHOUT_HEAD(lb_cpu_steering);
+ATF_TC_BODY(lb_cpu_steering, tc)
+{
+	struct sockaddr_storage ss;
+	int *sds;
+	int cpu, error, i, mismatch, n, ncpu;
+	const int nconns = 256;
+
+	ncpu = lb_ncpus();
+	if (ncpu > 64)
+		ncpu = 64;
+	sds = calloc(ncpu, sizeof(*sds));
+	ATF_REQUIRE_MSG(sds != NULL, "calloc() failed: %s", strerror(errno));
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	lb_cpu_set(sds[0], 0);
+	for (i = 1; i < ncpu; i++) {
+		sds[i] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+		    lb_addr_port(&ss), &ss);
+		lb_cpu_set(sds[i], i);
+	}
+
+	for (n = 0, mismatch = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, ncpu, &cpu);
+		if (cpu >= 0 && cpu < ncpu && cpu != i)
+			mismatch++;
+	}
+
+	/*
+	 * The accepting thread is not pinned, so a connection whose handshake
+	 * completed after a migration can miss.  Steering must still hold for
+	 * the overwhelming majority.
+	 */
+	ATF_REQUIRE_MSG(mismatch <= nconns / 20,
+	    "%d of %d connections were not steered", mismatch, nconns);
+
+	for (i = 0; i < ncpu; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+	free(sds);
+}
+
+/*
+ * Two listeners tagged with the same CPU must share that CPU's connections.
+ * Selecting the first matching member would starve the second one.
+ */
+ATF_TC_WITHOUT_HEAD(lb_cpu_duplicates);
+ATF_TC_BODY(lb_cpu_duplicates, tc)
+{
+	struct sockaddr_storage ss;
+	int *acceptcnt, *sds;
+	int cpu, error, i, n, ncpu, nsds;
+	const int nconns = 512;
+
+	ncpu = lb_ncpus();
+	if (ncpu > 32)
+		ncpu = 32;
+	nsds = 2 * ncpu;
+	sds = calloc(nsds, sizeof(*sds));
+	ATF_REQUIRE_MSG(sds != NULL, "calloc() failed: %s", strerror(errno));
+	acceptcnt = calloc(nsds, sizeof(*acceptcnt));
+	ATF_REQUIRE_MSG(acceptcnt != NULL, "calloc() failed: %s",
+	    strerror(errno));
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	lb_cpu_set(sds[0], 0);
+	for (i = 1; i < nsds; i++) {
+		sds[i] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+		    lb_addr_port(&ss), &ss);
+		lb_cpu_set(sds[i], i / 2);
+	}
+
+	for (n = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, nsds, &cpu);
+		acceptcnt[i]++;
+	}
+
+	for (i = 0; i < ncpu; i++) {
+		if (acceptcnt[2 * i] + acceptcnt[2 * i + 1] < 20)
+			continue;
+		ATF_REQUIRE_MSG(acceptcnt[2 * i] > 0 &&
+		    acceptcnt[2 * i + 1] > 0,
+		    "CPU %d: listeners took %d and %d connections", i,
+		    acceptcnt[2 * i], acceptcnt[2 * i + 1]);
+	}
+
+	for (i = 0; i < nsds; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+	free(acceptcnt);
+	free(sds);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, basic_ipv4);
@@ -714,6 +1076,11 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, connect_bound);
 	ATF_TP_ADD_TC(tp, connect_udp);
 	ATF_TP_ADD_TC(tp, connect_udp6);
+	ATF_TP_ADD_TC(tp, lb_cpu_readback_ipv4);
+	ATF_TP_ADD_TC(tp, lb_cpu_readback_ipv6);
+	ATF_TP_ADD_TC(tp, lb_cpu_readback_udp);
+	ATF_TP_ADD_TC(tp, lb_cpu_steering);
+	ATF_TP_ADD_TC(tp, lb_cpu_duplicates);
 
 	return (atf_no_error());
 }
