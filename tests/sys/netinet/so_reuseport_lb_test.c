@@ -48,6 +48,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -916,6 +917,8 @@ lb_connect_once(int domain, const struct sockaddr_storage *ss, int sds[],
 	}
 }
 
+static int lb_thread_cpus(void);
+
 /*
  * A listener has no receive-CPU tag until it is given one; a socket returned
  * by accept(2) carries the CPU on which its handshake was completed.
@@ -933,7 +936,9 @@ lb_cpu_export(int domain)
 	(void)lb_connect_once(domain, &ss, &sd, 1, &cpu);
 	ATF_REQUIRE_MSG(cpu >= 0 && cpu < ncpu,
 	    "accepted socket reports CPU %d of %d", cpu, ncpu);
-	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+	/* A thread pinned to one CPU would just have tagged the listener. */
+	if (lb_thread_cpus() > 1)
+		ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
 
 	error = close(sd);
 	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
@@ -951,6 +956,630 @@ ATF_TC_BODY(lb_cpu_export_ipv6, tc)
 	lb_cpu_export(PF_INET6);
 }
 
+/*
+ * Helpers for the learning done at accept(2).  The tests below change
+ * net.inet.tcp.reuseport_lb_accept_cpu, so they save the current value in
+ * the work directory and restore it from a cleanup routine.
+ */
+#define	LB_ACCEPT_SYSCTL	"net.inet.tcp.reuseport_lb_accept_cpu"
+#define	LB_ACCEPT_SAVEFILE	"lb_accept_learn"
+
+static void
+lb_accept_learn_set(bool learn)
+{
+	int error;
+
+	error = sysctlbyname(LB_ACCEPT_SYSCTL, NULL, NULL, &learn,
+	    sizeof(learn));
+	ATF_REQUIRE_MSG(error == 0, "sysctl %s=%d failed: %s",
+	    LB_ACCEPT_SYSCTL, (int)learn, strerror(errno));
+}
+
+static void
+lb_accept_learn_save(void)
+{
+	FILE *fp;
+	size_t len;
+	bool learn;
+
+	len = sizeof(learn);
+	ATF_REQUIRE_MSG(sysctlbyname(LB_ACCEPT_SYSCTL, &learn, &len, NULL,
+	    0) == 0, "sysctl %s failed: %s", LB_ACCEPT_SYSCTL,
+	    strerror(errno));
+	fp = fopen(LB_ACCEPT_SAVEFILE, "w");
+	ATF_REQUIRE_MSG(fp != NULL, "fopen() failed: %s", strerror(errno));
+	ATF_REQUIRE(fprintf(fp, "%d\n", (int)learn) > 0);
+	ATF_REQUIRE(fclose(fp) == 0);
+}
+
+static void
+lb_accept_learn_restore(void)
+{
+	FILE *fp;
+	bool learn;
+	int val;
+
+	fp = fopen(LB_ACCEPT_SAVEFILE, "r");
+	if (fp == NULL)
+		return;
+	if (fscanf(fp, "%d", &val) == 1) {
+		learn = val != 0;
+		(void)sysctlbyname(LB_ACCEPT_SYSCTL, NULL, NULL, &learn,
+		    sizeof(learn));
+	}
+	(void)fclose(fp);
+}
+
+static cpuset_t lb_thread_mask;
+static bool lb_thread_mask_saved;
+
+/* The number of CPUs the test thread started out allowed to run on. */
+static int
+lb_thread_cpus(void)
+{
+	int error;
+
+	if (!lb_thread_mask_saved) {
+		error = cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1,
+		    sizeof(lb_thread_mask), &lb_thread_mask);
+		ATF_REQUIRE_MSG(error == 0, "cpuset_getaffinity() failed: %s",
+		    strerror(errno));
+		lb_thread_mask_saved = true;
+	}
+	return (CPU_COUNT(&lb_thread_mask));
+}
+
+static void
+lb_pin(int cpu)
+{
+	cpuset_t set;
+	int error;
+
+	(void)lb_thread_cpus();
+	if (!CPU_ISSET(cpu, &lb_thread_mask))
+		atf_tc_skip("CPU %d is outside the test thread's cpuset", cpu);
+	CPU_ZERO(&set);
+	CPU_SET(cpu, &set);
+	error = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1,
+	    sizeof(set), &set);
+	ATF_REQUIRE_MSG(error == 0, "cpuset_setaffinity() failed: %s",
+	    strerror(errno));
+}
+
+static void
+lb_unpin(void)
+{
+	int error;
+
+	(void)lb_thread_cpus();
+	error = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1,
+	    sizeof(lb_thread_mask), &lb_thread_mask);
+	ATF_REQUIRE_MSG(error == 0, "cpuset_setaffinity() failed: %s",
+	    strerror(errno));
+}
+
+static uint16_t
+lb_addr_port(const struct sockaddr_storage *ss)
+{
+	if (ss->ss_family == AF_INET)
+		return (((const struct sockaddr_in *)ss)->sin_port);
+	return (((const struct sockaddr_in6 *)ss)->sin6_port);
+}
+
+/*
+ * Give listener i the tag cpus[i] by accepting its first connection from a
+ * thread pinned there, or no tag (cpus[i] < 0) by accepting unpinned.  Which
+ * listener a connection reaches is the kernel's choice, so connect until
+ * every listener has taken one.
+ */
+static void
+lb_tag_listeners(int domain, const struct sockaddr_storage *ss, int sds[],
+    int nsds, const int cpus[])
+{
+	const struct linger lopt = { 1, 0 };
+	struct pollfd *pfd;
+	bool *done;
+	socklen_t slen;
+	int csd, error, i, left, n, sd;
+
+	done = calloc(nsds, sizeof(*done));
+	pfd = calloc(nsds, sizeof(*pfd));
+	ATF_REQUIRE_MSG(done != NULL && pfd != NULL, "calloc() failed: %s",
+	    strerror(errno));
+	slen = ss->ss_family == AF_INET ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
+	for (left = nsds, n = 0; left > 0 && n < 200 * nsds; n++) {
+		sd = socket(domain, SOCK_STREAM, 0);
+		ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+		error = connect(sd, (const struct sockaddr *)ss, slen);
+		ATF_REQUIRE_MSG(error == 0, "connect() failed: %s",
+		    strerror(errno));
+		error = setsockopt(sd, SOL_SOCKET, SO_LINGER, &lopt,
+		    sizeof(lopt));
+		ATF_REQUIRE_MSG(error == 0, "Setting linger failed: %s",
+		    strerror(errno));
+		for (;;) {
+			for (i = 0; i < nsds; i++) {
+				pfd[i].fd = sds[i];
+				pfd[i].events = POLLIN;
+			}
+			error = poll(pfd, nsds, 30000);
+			ATF_REQUIRE_MSG(error > 0,
+			    "poll() failed or timed out: %d, %s", error,
+			    strerror(errno));
+			for (i = 0; i < nsds; i++)
+				if ((pfd[i].revents & POLLIN) != 0)
+					break;
+			ATF_REQUIRE_MSG(i < nsds,
+			    "poll() reported no readable listener");
+			if (cpus[i] >= 0)
+				lb_pin(cpus[i]);
+			else
+				lb_unpin();
+			csd = accept(sds[i], NULL, NULL);
+			if (csd >= 0)
+				break;
+			ATF_REQUIRE_MSG(errno == EWOULDBLOCK || errno == EAGAIN,
+			    "accept() failed: %s", strerror(errno));
+		}
+		error = close(csd);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+		error = close(sd);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+		if (!done[i]) {
+			done[i] = true;
+			left--;
+			ATF_REQUIRE_EQ(cpus[i], lb_cpu_get(sds[i]));
+		}
+	}
+	lb_unpin();
+	ATF_REQUIRE_MSG(left == 0, "%d of %d listeners never took a connection",
+	    left, nsds);
+	free(pfd);
+	free(done);
+}
+
+/*
+ * With one listener on each CPU, a connection whose handshake the stack
+ * completed on CPU c must be accepted by listener c.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_steering);
+ATF_TC_HEAD(lb_cpu_steering, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_steering, tc)
+{
+	struct sockaddr_storage ss;
+	int *cpus, *sds;
+	int cpu, error, i, mismatch, n, ncpu;
+	const int nconns = 256;
+
+	ncpu = lb_ncpus();
+	if (ncpu > 64)
+		ncpu = 64;
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+	sds = calloc(ncpu, sizeof(*sds));
+	cpus = calloc(ncpu, sizeof(*cpus));
+	ATF_REQUIRE_MSG(sds != NULL && cpus != NULL, "calloc() failed: %s",
+	    strerror(errno));
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	for (i = 1; i < ncpu; i++)
+		sds[i] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+		    lb_addr_port(&ss), &ss);
+	for (i = 0; i < ncpu; i++)
+		cpus[i] = i;
+	lb_tag_listeners(PF_INET, &ss, sds, ncpu, cpus);
+
+	for (n = 0, mismatch = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, ncpu, &cpu);
+		if (cpu >= 0 && cpu < ncpu && cpu != i)
+			mismatch++;
+	}
+
+	/*
+	 * The accepting thread is not pinned, so a connection whose handshake
+	 * completed after a migration can miss.  Steering must still hold for
+	 * the overwhelming majority.
+	 */
+	ATF_REQUIRE_MSG(mismatch <= nconns / 20,
+	    "%d of %d connections were not steered", mismatch, nconns);
+
+	for (i = 0; i < ncpu; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+	free(cpus);
+	free(sds);
+}
+ATF_TC_CLEANUP(lb_cpu_steering, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Two listeners on the same CPU must share that CPU's connections.
+ * Selecting the first matching member would starve the second one.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_duplicates);
+ATF_TC_HEAD(lb_cpu_duplicates, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_duplicates, tc)
+{
+	struct sockaddr_storage ss;
+	int *acceptcnt, *cpus, *sds;
+	int cpu, error, i, n, ncpu, nsds;
+	const int nconns = 512;
+
+	ncpu = lb_ncpus();
+	if (ncpu > 32)
+		ncpu = 32;
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+	nsds = 2 * ncpu;
+	sds = calloc(nsds, sizeof(*sds));
+	cpus = calloc(nsds, sizeof(*cpus));
+	acceptcnt = calloc(nsds, sizeof(*acceptcnt));
+	ATF_REQUIRE_MSG(sds != NULL && cpus != NULL && acceptcnt != NULL,
+	    "calloc() failed: %s", strerror(errno));
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	for (i = 1; i < nsds; i++)
+		sds[i] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+		    lb_addr_port(&ss), &ss);
+	for (i = 0; i < nsds; i++)
+		cpus[i] = i / 2;
+	lb_tag_listeners(PF_INET, &ss, sds, nsds, cpus);
+
+	for (n = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, nsds, &cpu);
+		acceptcnt[i]++;
+	}
+
+	for (i = 0; i < ncpu; i++) {
+		if (acceptcnt[2 * i] + acceptcnt[2 * i + 1] < 20)
+			continue;
+		ATF_REQUIRE_MSG(acceptcnt[2 * i] > 0 &&
+		    acceptcnt[2 * i + 1] > 0,
+		    "CPU %d: listeners took %d and %d connections", i,
+		    acceptcnt[2 * i], acceptcnt[2 * i + 1]);
+	}
+
+	for (i = 0; i < nsds; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+	free(acceptcnt);
+	free(cpus);
+	free(sds);
+}
+ATF_TC_CLEANUP(lb_cpu_duplicates, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * A member with no tag is owed the same share as the tagged ones: the CPUs
+ * that receive spend what is left of their slots on it.  An exclusive claim
+ * on each CPU would starve it instead.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_untagged_share);
+ATF_TC_HEAD(lb_cpu_untagged_share, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_untagged_share, tc)
+{
+	struct sockaddr_storage ss;
+	int *acceptcnt, *cpus, *sds;
+	int cpu, error, i, n, ncpu, nsds;
+	const int nconns = 512;
+
+	ncpu = lb_ncpus();
+	if (lb_thread_cpus() < 2)
+		atf_tc_skip("the test thread is pinned to one CPU");
+	if (ncpu > 32)
+		ncpu = 32;
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+	nsds = ncpu + 1;		/* one per CPU, plus one with no tag */
+	sds = calloc(nsds, sizeof(*sds));
+	cpus = calloc(nsds, sizeof(*cpus));
+	acceptcnt = calloc(nsds, sizeof(*acceptcnt));
+	ATF_REQUIRE_MSG(sds != NULL && cpus != NULL && acceptcnt != NULL,
+	    "calloc() failed: %s", strerror(errno));
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	for (i = 1; i < nsds; i++)
+		sds[i] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+		    lb_addr_port(&ss), &ss);
+	for (i = 0; i < ncpu; i++)
+		cpus[i] = i;
+	cpus[nsds - 1] = -1;
+	lb_tag_listeners(PF_INET, &ss, sds, nsds, cpus);
+
+	for (n = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, nsds, &cpu);
+		acceptcnt[i]++;
+	}
+
+	ATF_REQUIRE_MSG(acceptcnt[nsds - 1] > 0,
+	    "the untagged listener took none of %d connections", nconns);
+	ATF_REQUIRE_MSG(acceptcnt[nsds - 1] < nconns / 2,
+	    "the untagged listener took %d of %d connections",
+	    acceptcnt[nsds - 1], nconns);
+
+	for (i = 0; i < nsds; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+	free(acceptcnt);
+	free(cpus);
+	free(sds);
+}
+ATF_TC_CLEANUP(lb_cpu_untagged_share, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Tagging only some of the CPUs still steers the ones that were tagged.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_partial_claims);
+ATF_TC_HEAD(lb_cpu_partial_claims, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_partial_claims, tc)
+{
+	struct sockaddr_storage ss;
+	const int cpus[2] = { 0, 1 };
+	int sds[2];
+	int cpu, error, i, matched, mismatch, n;
+	const int nconns = 256;
+
+	if (lb_ncpus() < 2)
+		atf_tc_skip("a single CPU cannot be partially claimed");
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK, 0, &ss);
+	sds[1] = lb_bound_socket(PF_INET, SOCK_STREAM, SOCK_NONBLOCK,
+	    lb_addr_port(&ss), &ss);
+	lb_tag_listeners(PF_INET, &ss, sds, 2, cpus);
+
+	for (n = 0, matched = 0, mismatch = 0; n < nconns; n++) {
+		i = lb_connect_once(PF_INET, &ss, sds, 2, &cpu);
+		if (cpu != 0 && cpu != 1)
+			continue;	/* no member claimed that CPU */
+		if (cpu == i)
+			matched++;
+		else
+			mismatch++;
+	}
+
+	ATF_REQUIRE_MSG(mismatch <= (matched + mismatch) / 20,
+	    "%d of %d connections on a claimed CPU were not steered",
+	    mismatch, matched + mismatch);
+
+	for (i = 0; i < 2; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+}
+ATF_TC_CLEANUP(lb_cpu_partial_claims, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Connect to "ss" and accept the connection on one of "nsds" blocking
+ * listeners, returning the index of the one that accepted.
+ */
+static int
+lb_exchange(const struct sockaddr_storage *ss, int sds[], int nsds)
+{
+	struct pollfd *pfd;
+	socklen_t slen;
+	int csd, error, i, n, sd;
+
+	slen = ss->ss_family == AF_INET ? sizeof(struct sockaddr_in) :
+	    sizeof(struct sockaddr_in6);
+	sd = socket(ss->ss_family == AF_INET ? PF_INET : PF_INET6,
+	    SOCK_STREAM, 0);
+	ATF_REQUIRE_MSG(sd >= 0, "socket() failed: %s", strerror(errno));
+	error = connect(sd, (const struct sockaddr *)ss, slen);
+	ATF_REQUIRE_MSG(error == 0, "connect() failed: %s", strerror(errno));
+
+	pfd = calloc(nsds, sizeof(*pfd));
+	ATF_REQUIRE_MSG(pfd != NULL, "calloc() failed: %s", strerror(errno));
+	for (i = 0; i < nsds; i++) {
+		pfd[i].fd = sds[i];
+		pfd[i].events = POLLIN;
+	}
+	n = poll(pfd, nsds, 30000);
+	ATF_REQUIRE_MSG(n > 0, "poll() failed or timed out: %d, %s", n,
+	    strerror(errno));
+	for (i = 0; i < nsds; i++)
+		if ((pfd[i].revents & POLLIN) != 0)
+			break;
+	ATF_REQUIRE_MSG(i < nsds, "poll() reported no readable listener");
+	free(pfd);
+
+	csd = accept(sds[i], NULL, NULL);
+	ATF_REQUIRE_MSG(csd >= 0, "accept() failed: %s", strerror(errno));
+	error = close(csd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+	return (i);
+}
+
+/*
+ * A pinned thread accepting on an untagged listener gives it that CPU.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_capture);
+ATF_TC_HEAD(lb_cpu_accept_capture, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_accept_capture, tc)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, pin, sd;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	pin = ncpu > 1 ? 1 : 0;
+	lb_pin(pin);
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(pin, lb_cpu_get(sd));
+
+	/* A later accept(2) does not move the tag. */
+	lb_pin(0);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(pin, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_capture, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * A thread that is not pinned to exactly one CPU says nothing, so existing
+ * applications keep the distribution they have.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_unpinned);
+ATF_TC_HEAD(lb_cpu_accept_unpinned, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_accept_unpinned, tc)
+{
+	struct sockaddr_storage ss;
+	int error, sd;
+
+	if (lb_thread_cpus() < 2)
+		atf_tc_skip("the test thread is pinned to one CPU");
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_unpinned, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * Nothing is learned when the behaviour is turned off.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_off);
+ATF_TC_HEAD(lb_cpu_accept_off, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_accept_off, tc)
+{
+	struct sockaddr_storage ss;
+	int error, ncpu, sd;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(false);
+
+	lb_pin(ncpu > 1 ? 1 : 0);
+	sd = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	(void)lb_exchange(&ss, &sd, 1);
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sd));
+
+	error = close(sd);
+	ATF_REQUIRE_MSG(error == 0, "close() failed: %s", strerror(errno));
+}
+ATF_TC_CLEANUP(lb_cpu_accept_off, tc)
+{
+	lb_accept_learn_restore();
+}
+
+/*
+ * One listener being given a CPU must not starve the others, however few
+ * CPUs the group is known to receive on.
+ */
+ATF_TC_WITH_CLEANUP(lb_cpu_accept_no_starve);
+ATF_TC_HEAD(lb_cpu_accept_no_starve, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "is_exclusive", "true");
+}
+ATF_TC_BODY(lb_cpu_accept_no_starve, tc)
+{
+	struct sockaddr_storage ss;
+	int acceptcnt[2], sds[2];
+	int error, i, n, ncpu, tagged;
+	const int nconns = 256;
+
+	ncpu = lb_ncpus();
+	lb_accept_learn_save();
+	lb_accept_learn_set(true);
+
+	lb_pin(ncpu > 1 ? 1 : 0);
+	sds[0] = lb_bound_socket(PF_INET, SOCK_STREAM, 0, 0, &ss);
+	sds[1] = lb_bound_socket(PF_INET, SOCK_STREAM, 0,
+	    lb_addr_port(&ss), &ss);
+
+	/* One accept(2) gives a CPU to whichever listener took it. */
+	tagged = lb_exchange(&ss, sds, 2);
+	ATF_REQUIRE_MSG(lb_cpu_get(sds[tagged]) != -1,
+	    "the accepting listener was given no CPU");
+	ATF_REQUIRE_EQ(-1, lb_cpu_get(sds[1 - tagged]));
+
+	acceptcnt[0] = acceptcnt[1] = 0;
+	for (n = 0; n < nconns; n++)
+		acceptcnt[lb_exchange(&ss, sds, 2)]++;
+
+	ATF_REQUIRE_MSG(acceptcnt[1 - tagged] > 0,
+	    "the untagged listener was starved: %d and %d connections",
+	    acceptcnt[0], acceptcnt[1]);
+
+	for (i = 0; i < 2; i++) {
+		error = close(sds[i]);
+		ATF_REQUIRE_MSG(error == 0, "close() failed: %s",
+		    strerror(errno));
+	}
+}
+ATF_TC_CLEANUP(lb_cpu_accept_no_starve, tc)
+{
+	lb_accept_learn_restore();
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, basic_ipv4);
@@ -965,6 +1594,14 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, connect_udp6);
 	ATF_TP_ADD_TC(tp, lb_cpu_export_ipv4);
 	ATF_TP_ADD_TC(tp, lb_cpu_export_ipv6);
+	ATF_TP_ADD_TC(tp, lb_cpu_steering);
+	ATF_TP_ADD_TC(tp, lb_cpu_duplicates);
+	ATF_TP_ADD_TC(tp, lb_cpu_untagged_share);
+	ATF_TP_ADD_TC(tp, lb_cpu_partial_claims);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_capture);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_unpinned);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_off);
+	ATF_TP_ADD_TC(tp, lb_cpu_accept_no_starve);
 
 	return (atf_no_error());
 }
