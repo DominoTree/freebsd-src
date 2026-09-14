@@ -132,6 +132,28 @@ void    in_pcbremhash(struct inpcb *);
 struct inpcblbgroup *in_pcblbgroup_find(struct inpcb *inp,
 	    struct lbgroupbucket **bucket);
 
+/* Slots per member, and the most a map may hold. */
+#define	INPCBLB_SLOTS		16
+#define	INPCBLB_SLOTS_MAX	4096
+
+/* Accept counting window.  A CPU silent for two windows is forgotten. */
+#define	INPCBLB_RXWINDOW	(10 * hz)
+
+/* Two windows of per-CPU accept counts, in bytes. */
+#define	INPCBLB_RXCNT_SIZE	(2 * (mp_maxid + 1) * sizeof(uint32_t))
+
+/*
+ * Each receiving CPU owns a run of slots; each slot names a member.  A map
+ * is never modified once published: a new one is built under the bucket
+ * lock and swapped in.
+ */
+struct inpcblbmap {
+	struct epoch_context lm_epoch_ctx;
+	uint32_t	lm_nslots;
+	uint32_t	*lm_cpu;	/* per CPU, offset << 16 | count */
+	struct inpcb	**lm_slot;	/* lm_nslots members */
+};
+
 /*
  * Load balance groups used for the SO_REUSEPORT_LB socket option. Each group
  * (or unique address:port combination) can be re-used at most
@@ -153,7 +175,48 @@ struct inpcblbgroup {
 	uint32_t	il_inpsiz; /* max count in il_inp[] (h) */
 	uint32_t	il_inpcnt; /* cur count in il_inp[] (h) */
 	uint32_t	il_pendcnt; /* cur count in il_pending (h) */
+	struct inpcblbmap *il_map; /* selection map, or NULL (h) */
+	uint32_t	*il_rxcnt; /* per window, per CPU accepts (h) */
+	uint32_t	il_rxwin;  /* window il_rxcnt is counting into (h) */
+	int		il_rxtick; /* when that window was opened (h) */
 	struct inpcb	*il_inp[];			/* (h) */
 };
+
+/*
+ * Pick a member for a packet on this CPU.  A map row for this CPU names
+ * the nearest; otherwise by hash.  Never NULL for a non-empty group: the
+ * caller reads NULL as no group.
+ */
+static inline struct inpcb *
+in_pcblbgroup_select(const struct inpcblbgroup *grp, uint32_t hash)
+{
+	const struct inpcblbmap *map;
+	struct inpcb *inp;
+	uint32_t count, entry, n;
+
+	count = atomic_load_acq_int(&grp->il_inpcnt);
+	if (count == 0)
+		return (NULL);
+
+	map = atomic_load_consume_ptr(&grp->il_map);
+	if (map != NULL) {
+		entry = map->lm_cpu[curcpu];
+		n = entry & 0xffff;
+		if (n != 0) {
+			/* Ports are in the low bits; scaling uses the high. */
+			hash ^= hash >> 16;
+			hash *= 0x85ebca6b;
+			hash ^= hash >> 13;
+			hash *= 0xc2b2ae35;
+			hash ^= hash >> 16;
+			return (map->lm_slot[(entry >> 16) +
+			    (uint32_t)(((uint64_t)hash * n) >> 32)]);
+		}
+	}
+
+	inp = grp->il_inp[hash % count];
+	KASSERT(inp != NULL, ("%s: inp == NULL", __func__));
+	return (inp);
+}
 
 #endif /* !_NETINET_IN_PCB_VAR_H_ */
