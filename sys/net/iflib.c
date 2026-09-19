@@ -4977,15 +4977,111 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 		break;
 	}
 	case SIOCGIFRSSKEY:
+	{
+		struct ifrsskey *ifrk = (struct ifrsskey *)data;
+
+		memset(&ifrk->ifrk_func, 0, sizeof(*ifrk) -
+		    __offsetof(struct ifrsskey, ifrk_func));
 		CTX_LOCK(ctx);
-		err = IFDI_GET_RSS_KEY(ctx, (struct ifrsskey *)data);
+		if ((ctx->ifc_flags & IFC_INIT_DONE) != 0)
+			err = IFDI_GET_RSS_KEY(ctx, ifrk);
+		else
+			err = ENXIO;
 		CTX_UNLOCK(ctx);
 		break;
+	}
 	case SIOCGIFRSSHASH:
+	{
+		struct ifrsshash *ifrh = (struct ifrsshash *)data;
+
+		memset(&ifrh->ifrh_func, 0, sizeof(*ifrh) -
+		    __offsetof(struct ifrsshash, ifrh_func));
 		CTX_LOCK(ctx);
-		err = IFDI_GET_RSS_HASH(ctx, (struct ifrsshash *)data);
+		if ((ctx->ifc_flags & IFC_INIT_DONE) != 0)
+			err = IFDI_GET_RSS_HASH(ctx, ifrh);
+		else
+			err = ENXIO;
 		CTX_UNLOCK(ctx);
 		break;
+	}
+	case SIOCSIFRSSKEY:
+	{
+		struct ifrsskey *ifrk = (struct ifrsskey *)data;
+
+		if (ifrk->ifrk_func != RSS_FUNC_TOEPLITZ ||
+		    ifrk->ifrk_spare0 != 0 ||
+		    ifrk->ifrk_keylen == 0 ||
+		    ifrk->ifrk_keylen > sizeof(ifrk->ifrk_key)) {
+			err = EINVAL;
+			break;
+		}
+		memset(&ifrk->ifrk_key[ifrk->ifrk_keylen], 0,
+		    sizeof(ifrk->ifrk_key) - ifrk->ifrk_keylen);
+		CTX_LOCK(ctx);
+		if ((ctx->ifc_flags & IFC_INIT_DONE) != 0)
+			err = IFDI_SET_RSS_KEY(ctx, ifrk);
+		else
+			err = ENXIO;
+		CTX_UNLOCK(ctx);
+		break;
+	}
+	case SIOCGIFRSSTABLE:
+	{
+		struct ifrsstable *ifrt = (struct ifrsstable *)data;
+		if_softc_ctx_t scctx = &ctx->ifc_softc_ctx;
+
+		if (scctx->isc_rss_table_size > RSS_TABLELEN) {
+			err = EMSGSIZE;
+			break;
+		}
+		memset(&ifrt->ifrt_nentries, 0, sizeof(*ifrt) -
+		    __offsetof(struct ifrsstable, ifrt_nentries));
+		CTX_LOCK(ctx);
+		if ((ctx->ifc_flags & IFC_INIT_DONE) != 0)
+			err = IFDI_GET_RSS_TABLE(ctx, ifrt);
+		else
+			err = ENXIO;
+		CTX_UNLOCK(ctx);
+		if (err == 0 &&
+		    ifrt->ifrt_nentries != scctx->isc_rss_table_size)
+			err = EINVAL;
+		if (err == 0)
+			ifrt->ifrt_nqueues = scctx->isc_nrxqsets;
+		break;
+	}
+	case SIOCSIFRSSTABLE:
+	{
+		struct ifrsstable *ifrt = (struct ifrsstable *)data;
+		if_softc_ctx_t scctx = &ctx->ifc_softc_ctx;
+		uint16_t i;
+
+		if (scctx->isc_rss_table_size > RSS_TABLELEN) {
+			err = EMSGSIZE;
+			break;
+		}
+		if (ifrt->ifrt_nentries != scctx->isc_rss_table_size) {
+			err = EINVAL;
+			break;
+		}
+		for (i = 0; i < ifrt->ifrt_nentries; i++) {
+			if (ifrt->ifrt_table[i] >= scctx->isc_nrxqsets)
+				break;
+		}
+		if (i < ifrt->ifrt_nentries) {
+			err = EINVAL;
+			break;
+		}
+		memset(&ifrt->ifrt_table[ifrt->ifrt_nentries], 0,
+		    sizeof(ifrt->ifrt_table) -
+		    ifrt->ifrt_nentries * sizeof(ifrt->ifrt_table[0]));
+		CTX_LOCK(ctx);
+		if ((ctx->ifc_flags & IFC_INIT_DONE) != 0)
+			err = IFDI_SET_RSS_TABLE(ctx, ifrt);
+		else
+			err = ENXIO;
+		CTX_UNLOCK(ctx);
+		break;
+	}
 	case SIOCGPRIVATE_0:
 	case SIOCSDRVSPEC:
 	case SIOCGDRVSPEC:
