@@ -127,13 +127,20 @@ CODE {
 	}
 
 	static int
-	null_get_rss_key(if_ctx_t _ctx __unused, struct ifrsskey *_key __unused)
+	null_rss_key_op(if_ctx_t _ctx __unused, struct ifrsskey *_key __unused)
 	{
 		return (EOPNOTSUPP);
 	}
 
 	static int
 	null_get_rss_hash(if_ctx_t _ctx __unused, struct ifrsshash *_hash __unused)
+	{
+		return (EOPNOTSUPP);
+	}
+
+	static int
+	null_rss_table_op(if_ctx_t _ctx __unused,
+	    struct ifrsstable *_table __unused)
 	{
 		return (EOPNOTSUPP);
 	}
@@ -362,18 +369,34 @@ METHOD int priv_ioctl {
 #
 
 #
-# Report the programmed RSS key and hash selections under the context lock.
-# Unsupported queries return EOPNOTSUPP; unavailable state returns an error.
+# Report or program the RSS key, hash selections and indirection table under
+# the context lock.  iflib validates what it hands to the setters.
+# Unsupported methods return EOPNOTSUPP; unavailable state returns an error.
 #
 METHOD int get_rss_key {
 	if_ctx_t _ctx;
 	struct ifrsskey *_key;
-} DEFAULT null_get_rss_key;
+} DEFAULT null_rss_key_op;
+
+METHOD int set_rss_key {
+	if_ctx_t _ctx;
+	struct ifrsskey *_key;
+} DEFAULT null_rss_key_op;
 
 METHOD int get_rss_hash {
 	if_ctx_t _ctx;
 	struct ifrsshash *_hash;
 } DEFAULT null_get_rss_hash;
+
+METHOD int get_rss_table {
+	if_ctx_t _ctx;
+	struct ifrsstable *_table;
+} DEFAULT null_rss_table_op;
+
+METHOD int set_rss_table {
+	if_ctx_t _ctx;
+	struct ifrsstable *_table;
+} DEFAULT null_rss_table_op;
 
 METHOD int i2c_req {
 	if_ctx_t _ctx;
