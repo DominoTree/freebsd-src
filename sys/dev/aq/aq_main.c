@@ -204,7 +204,10 @@ static int	aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req);
 
 /* RSS */
 static int	aq_if_get_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk);
+static int	aq_if_set_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk);
 static int	aq_if_get_rss_hash(if_ctx_t ctx, struct ifrsshash *ifrh);
+static int	aq_if_get_rss_table(if_ctx_t ctx, struct ifrsstable *ifrt);
+static int	aq_if_set_rss_table(if_ctx_t ctx, struct ifrsstable *ifrt);
 
 static device_method_t aq_methods[] = {
 	DEVMETHOD(device_register, aq_register),
@@ -275,7 +278,10 @@ static device_method_t aq_if_methods[] = {
 
 	/* RSS */
 	DEVMETHOD(ifdi_get_rss_key, aq_if_get_rss_key),
+	DEVMETHOD(ifdi_set_rss_key, aq_if_set_rss_key),
 	DEVMETHOD(ifdi_get_rss_hash, aq_if_get_rss_hash),
+	DEVMETHOD(ifdi_get_rss_table, aq_if_get_rss_table),
+	DEVMETHOD(ifdi_set_rss_table, aq_if_set_rss_table),
 
 	DEVMETHOD_END
 };
@@ -453,6 +459,7 @@ aq_if_attach_pre(if_ctx_t ctx)
 
 	scctx->isc_ntxqsets_max = HW_ATL_B0_RINGS_MAX;
 	scctx->isc_nrxqsets_max = HW_ATL_RSS_INDIRECTION_QUEUES_MAX;
+	scctx->isc_rss_table_size = HW_ATL_RSS_INDIRECTION_TABLE_MAX;
 
 	/* iflib will map and release this bar */
 	scctx->isc_msix_bar = pci_msix_table_bar(softc->dev);
@@ -1328,6 +1335,82 @@ aq_if_get_rss_hash(if_ctx_t ctx, struct ifrsshash *ifrh)
 
 	ifrh->ifrh_func = RSS_FUNC_TOEPLITZ;
 	ifrh->ifrh_types = aq_rss_iftypes(softc);
+
+	return (0);
+}
+
+/* Until aq calls iflib_init_failed(), running does not mean initialised. */
+static bool
+aq_rss_hw_live(if_ctx_t ctx, struct aq_dev *softc)
+{
+
+	return (iflib_is_running(ctx) && !softc->init_failed);
+}
+
+static int
+aq_rss_hw_failed(if_ctx_t ctx, struct aq_dev *softc, int err)
+{
+
+	device_printf(softc->dev, "could not program RSS: %d\n", err);
+	softc->reset_pending = true;
+	iflib_request_reset_if_up(ctx);
+	iflib_admin_intr_deferred(ctx);
+
+	return (err);
+}
+
+static int
+aq_if_set_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+	int err;
+
+	if (ifrk->ifrk_keylen != HW_ATL_RSS_HASHKEY_SIZE)
+		return (EINVAL);
+
+	if (aq_rss_hw_live(ctx, softc) && !softc->reset_pending) {
+		err = aq_hw_rss_hash_set(&softc->hw, ifrk->ifrk_key);
+		if (err != 0)
+			return (aq_rss_hw_failed(ctx, softc, err));
+	}
+	memcpy(softc->rss_key, ifrk->ifrk_key, HW_ATL_RSS_HASHKEY_SIZE);
+
+	return (0);
+}
+
+static int
+aq_if_get_rss_table(if_ctx_t ctx, struct ifrsstable *ifrt)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+	uint16_t i;
+
+	_Static_assert(RSS_TABLELEN >= HW_ATL_RSS_INDIRECTION_TABLE_MAX,
+	    "RSS table buffer too small");
+
+	ifrt->ifrt_nentries = HW_ATL_RSS_INDIRECTION_TABLE_MAX;
+	for (i = 0; i < HW_ATL_RSS_INDIRECTION_TABLE_MAX; i++)
+		ifrt->ifrt_table[i] = softc->rss_table[i];
+
+	return (0);
+}
+
+static int
+aq_if_set_rss_table(if_ctx_t ctx, struct ifrsstable *ifrt)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+	uint8_t table[HW_ATL_RSS_INDIRECTION_TABLE_MAX];
+	uint16_t i;
+	int err;
+
+	for (i = 0; i < HW_ATL_RSS_INDIRECTION_TABLE_MAX; i++)
+		table[i] = (uint8_t)ifrt->ifrt_table[i];
+
+	if (aq_rss_hw_live(ctx, softc) && !softc->reset_pending) {
+		err = aq_hw_rss_set(&softc->hw, table);
+		if (err != 0)
+			return (aq_rss_hw_failed(ctx, softc, err));
+	}
+	memcpy(softc->rss_table, table, sizeof(table));
 
 	return (0);
 }
