@@ -28,7 +28,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd September 10, 2026
+.Dd September 19, 2026
 .Dt IFCONFIG 8
 .Os
 .Sh NAME
@@ -325,6 +325,11 @@ will attempt to load it.
 Display only the interfaces that are up.
 .It Fl v
 Get more verbose status for an interface.
+When the driver reports them, this includes the receive-side scaling hash
+function and types, the hash key and the indirection table; see
+.Cm rsskey
+and
+.Cm rsstable .
 When supported, this includes the status of configured SR-IOV virtual
 functions.
 Fields that the PF driver cannot observe are omitted; an omitted field does
@@ -705,6 +710,40 @@ Set the interface name to
 The
 .Ar name
 may not be longer than 15 characters.
+.It Cm rsskey Ar key
+Program the receive-side scaling hash key of the interface.
+.Ar key
+is an even number of hexadecimal digits; the driver decides which key
+lengths its hardware accepts.
+An interface nobody has configured uses the key the kernel programs into
+every device, so setting a different key makes this interface alone
+diverge from it.
+The kernel's key is reported by the
+.Va net.inet.rss.key
+sysctl, and programming that value back undoes the divergence.
+A programmed key is reapplied whenever the driver reinitialises the
+device.
+.It Cm rsstable Ar queues
+Program the receive-side scaling indirection table of the interface,
+which selects the receive queue for each hash value.
+.Ar queues
+is
+.Cm default
+to spread the table evenly over every receive queue in turn, or a comma
+separated list of receive queue numbers and
+.Ar first Ns - Ns Ar last
+ranges, which the table entries are assigned to in turn.
+Naming a single queue therefore sends every hashed flow to that queue,
+which is useful when testing; traffic a driver steers outside the table
+is unaffected, see the driver's manual page.
+A programmed table is reapplied whenever the driver reinitialises the
+device, so the driver's own table is not restored by a down and up.
+.Pp
+Both commands require
+.Xr priv 9
+.Dv PRIV_NET_HWIOCTL ,
+which a jail receives only with its own network stack, and neither
+changes how the network stack itself hashes received packets.
 .It Cm rxcsum , txcsum , rxcsum6 , txcsum6
 If the driver supports user-configurable checksum offloading,
 enable receive (or transmit) checksum offloading on the interface.
@@ -3638,6 +3677,14 @@ wlan1: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
 .Pp
 Set a randomly-generated MAC address on tap0:
 .Dl # ifconfig tap0 ether random
+.Pp
+Send every hashed flow received on
+.Li aq0
+to receive queue 3, then spread flows over every queue again:
+.Bd -literal -offset indent
+ifconfig aq0 rsstable 3
+ifconfig aq0 rsstable default
+.Ed
 .Sh DIAGNOSTICS
 Messages indicating the specified interface does not exist, the
 requested address is unknown, or the user is not privileged and
