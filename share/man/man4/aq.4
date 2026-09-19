@@ -3,7 +3,7 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd September 13, 2026
+.Dd September 19, 2026
 .Dt AQ 4
 .Os
 .Sh NAME
@@ -33,6 +33,23 @@ Aquantia (now Marvell) AQtion AQC1xx Ethernet controllers.
 .Pp
 For more information on configuring this device, see
 .Xr ifconfig 8 .
+.Pp
+The
+.Nm
+driver is experimental, and has a number of caveats and limitations.
+.Pp
+The receive-side scaling hash key and indirection table can be read and
+programmed with
+.Xr ifconfig 8 ,
+and a programmed key or table is reapplied every time the interface is
+initialised.
+First generation adapters deliver UDP to receive queue 0 through a flow
+filter, regardless of the table, unless the kernel enables UDP hashing
+with the
+.Va net.inet.rss.udp_4tuple
+tunable under
+.Cd "options RSS" ;
+second generation adapters hash UDP through the table.
 .Sh HARDWARE
 The
 .Nm
