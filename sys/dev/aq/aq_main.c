@@ -202,6 +202,10 @@ static void aq_if_vlan_unregister(if_ctx_t ctx, uint16_t vtag);
 static void	aq_if_led_func(if_ctx_t ctx, int onoff);
 static int	aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req);
 
+/* RSS */
+static int	aq_if_get_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk);
+static int	aq_if_get_rss_hash(if_ctx_t ctx, struct ifrsshash *ifrh);
+
 static device_method_t aq_methods[] = {
 	DEVMETHOD(device_register, aq_register),
 	DEVMETHOD(device_probe, iflib_device_probe),
@@ -268,6 +272,10 @@ static device_method_t aq_if_methods[] = {
 	/* Informational/diagnostic */
 	DEVMETHOD(ifdi_led_func, aq_if_led_func),
 	DEVMETHOD(ifdi_i2c_req, aq_if_i2c_req),
+
+	/* RSS */
+	DEVMETHOD(ifdi_get_rss_key, aq_if_get_rss_key),
+	DEVMETHOD(ifdi_get_rss_hash, aq_if_get_rss_hash),
 
 	DEVMETHOD_END
 };
@@ -1263,6 +1271,50 @@ aq_if_led_func(if_ctx_t ctx, int onoff)
 		hw->fw_ops->led_control(hw, onoff);
 
 	AQ_DBG_EXIT(0);
+}
+
+static uint32_t
+aq_rss_iftypes(struct aq_dev *softc)
+{
+	u_int hashconfig = aq_rss_hashconfig();
+	uint32_t types;
+
+	if (IS_CHIP_FEATURE(&softc->hw, ATLANTIC2))
+		return (rss_hashconfig_to_iftypes(hashconfig));
+
+	types = RSS_TYPE_IPV4 | RSS_TYPE_TCP_IPV4 | RSS_TYPE_IPV6 |
+	    RSS_TYPE_TCP_IPV6;
+	if ((hashconfig & (RSS_HASHTYPE_RSS_UDP_IPV4 |
+	    RSS_HASHTYPE_RSS_UDP_IPV6 | RSS_HASHTYPE_RSS_UDP_IPV6_EX)) != 0)
+		types |= RSS_TYPE_UDP_IPV4 | RSS_TYPE_UDP_IPV6;
+
+	return (types);
+}
+
+static int
+aq_if_get_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+
+	_Static_assert(sizeof(ifrk->ifrk_key) >= HW_ATL_RSS_HASHKEY_SIZE,
+	    "RSS key buffer too small");
+
+	ifrk->ifrk_func = RSS_FUNC_TOEPLITZ;
+	ifrk->ifrk_keylen = HW_ATL_RSS_HASHKEY_SIZE;
+	memcpy(ifrk->ifrk_key, softc->rss_key, HW_ATL_RSS_HASHKEY_SIZE);
+
+	return (0);
+}
+
+static int
+aq_if_get_rss_hash(if_ctx_t ctx, struct ifrsshash *ifrh)
+{
+	struct aq_dev *softc = iflib_get_softc(ctx);
+
+	ifrh->ifrh_func = RSS_FUNC_TOEPLITZ;
+	ifrh->ifrh_types = aq_rss_iftypes(softc);
+
+	return (0);
 }
 
 static int
