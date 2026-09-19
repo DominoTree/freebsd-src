@@ -1317,6 +1317,11 @@ MLINKS+=iflibdd.9 ifdi_attach_pre.9 \
 	iflibdd.9 ifdi_detach.9 \
 	iflibdd.9 ifdi_get_counter.9 \
 	iflibdd.9 ifdi_i2c_req.9 \
+	iflibdd.9 ifdi_get_rss_hash.9 \
+	iflibdd.9 ifdi_get_rss_key.9 \
+	iflibdd.9 ifdi_get_rss_table.9 \
+	iflibdd.9 ifdi_set_rss_key.9 \
+	iflibdd.9 ifdi_set_rss_table.9 \
 	iflibdd.9 ifdi_init.9 \
 	iflibdd.9 ifdi_intr_enable.9 \
 	iflibdd.9 ifdi_intr_disable.9 \
