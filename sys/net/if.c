@@ -2900,6 +2900,8 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 #endif
 	case SIOCSIFMEDIA:
 	case SIOCSIFGENERIC:
+	case SIOCSIFRSSKEY:
+	case SIOCSIFRSSTABLE:
 		error = priv_check(td, PRIV_NET_HWIOCTL);
 		if (error)
 			return (error);
@@ -2918,6 +2920,7 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 	case SIOCGIFGENERIC:
 	case SIOCGIFRSSKEY:
 	case SIOCGIFRSSHASH:
+	case SIOCGIFRSSTABLE:
 	case SIOCGIFDOWNREASON:
 		if (ifp->if_ioctl == NULL)
 			return (EOPNOTSUPP);
