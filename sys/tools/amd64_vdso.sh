@@ -67,7 +67,9 @@ then
     exit 1
 fi
 
-${CC} -x assembler-with-cpp -DLOCORE -fPIC -nostdinc -c \
+# vdso_wrap.S .incbin's the vdso; ccache cannot see that dependency and
+# would embed a stale image.  Build it without ccache.
+env CCACHE_DISABLE=1 ${CC} -x assembler-with-cpp -DLOCORE -fPIC -nostdinc -c \
    -o elf-vdso.so.o -I. -I"${S}" -include opt_global.h \
    -DVDSO_NAME=elf_vdso_so_1 -DVDSO_FILE=\"elf-vdso.so.1\" \
    "${S}"/tools/vdso_wrap.S
