@@ -1056,9 +1056,10 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 #endif
 	int created, cuflags, descend, drflags, enforce;
 	int error, errmsg_len, errmsg_pos;
-	int gotchildmax, gotenforce, gothid, gotrsnum, gotslevel;
+	int gotchildmax, gotenforce, gothid, gotowner, gotrsnum, gotslevel;
 	int deadid, jfd_in, jfd_out, jfd_pos, jid, jsys, len, level;
 	int childmax, osreldt, rsnum, slevel;
+	uid_t owner;
 #ifdef INET
 	int ip4s;
 	bool redo_ip4;
@@ -1195,6 +1196,14 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 		goto done_free;
 	else
 		gotslevel = 1;
+
+	error = vfs_copyopt(opts, JAIL_PARAM_OWNER, &owner, sizeof(owner));
+	if (error == ENOENT)
+		gotowner = 0;
+	else if (error != 0)
+		goto done_free;
+	else
+		gotowner = 1;
 
 	error =
 	    vfs_copyopt(opts, JAIL_PARAM_CHILDREN_MAX, &childmax, sizeof(childmax));
@@ -1858,6 +1867,7 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 		pr->pr_flags |= _PR_IP_SADDRSEL;
 
 		pr->pr_securelevel = ppr->pr_securelevel;
+		pr->pr_owner = td->td_ucred->cr_uid;
 		pr->pr_allow = JAIL_DEFAULT_ALLOW & ppr->pr_allow;
 		pr->pr_enforce_statfs = jail_default_enforce_statfs;
 		pr->pr_devfs_rsnum = ppr->pr_devfs_rsnum;
@@ -1948,6 +1958,13 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			error = EPERM;
 			goto done_deref;
 		}
+	}
+	if (gotowner && jailed(td->td_ucred) &&
+	    owner != td->td_ucred->cr_uid && owner != pr->pr_owner) {
+		error = EPERM;
+		vfs_opterror(opts,
+		    "jailed processes may only set owner to their own uid");
+		goto done_deref;
 	}
 	if (gotchildmax) {
 		if (childmax >= ppr->pr_childmax) {
@@ -2121,6 +2138,8 @@ kern_jail_set(struct thread *td, struct uio *optuio, int flags)
 			if (tpr->pr_securelevel < slevel)
 				tpr->pr_securelevel = slevel;
 	}
+	if (gotowner)
+		pr->pr_owner = owner;
 	if (gotchildmax) {
 		pr->pr_childmax = childmax;
 		/* Set all child jails to under this limit. */
@@ -2825,6 +2844,10 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 #endif
 	error = vfs_setopt(opts, JAIL_PARAM_SECURELEVEL, &pr->pr_securelevel,
 	    sizeof(pr->pr_securelevel));
+	if (error != 0 && error != ENOENT)
+		goto done;
+	error = vfs_setopt(opts, JAIL_PARAM_OWNER, &pr->pr_owner,
+	    sizeof(pr->pr_owner));
 	if (error != 0 && error != ENOENT)
 		goto done;
 	error = vfs_setopt(opts, JAIL_PARAM_CHILDREN_CUR, &pr->pr_childcount,
@@ -5222,6 +5245,8 @@ SYSCTL_JAIL_PARAM_STRING(, name, CTLFLAG_RW, MAXHOSTNAMELEN, "Jail name");
 SYSCTL_JAIL_PARAM_STRING(, path, CTLFLAG_RDTUN, MAXPATHLEN, "Jail root path");
 SYSCTL_JAIL_PARAM(, securelevel, CTLTYPE_INT | CTLFLAG_RW,
     "I", "Jail secure level");
+SYSCTL_JAIL_PARAM(, owner, CTLTYPE_UINT | CTLFLAG_RW,
+    "IU", "Jail owner user ID");
 SYSCTL_JAIL_PARAM(, osreldate, CTLTYPE_INT | CTLFLAG_RDTUN, "I",
     "Jail value for kern.osreldate and uname -K");
 SYSCTL_JAIL_PARAM_STRING(, osrelease, CTLFLAG_RDTUN, OSRELEASELEN,
@@ -5703,6 +5728,7 @@ db_show_prison(struct prison *pr)
 #endif
 	db_printf(" root            = %p\n", pr->pr_root);
 	db_printf(" securelevel     = %d\n", pr->pr_securelevel);
+	db_printf(" owner           = %u\n", pr->pr_owner);
 	db_printf(" devfs_rsnum     = %d\n", pr->pr_devfs_rsnum);
 	db_printf(" children.max    = %d\n", pr->pr_childmax);
 	db_printf(" children.cur    = %d\n", pr->pr_childcount);
