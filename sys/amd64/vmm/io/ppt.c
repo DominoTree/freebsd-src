@@ -444,13 +444,12 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	ppt->resetting = true;
 	ppt->vm = vm;
 
-	pci_save_state(ppt->dev);
-
 	PPT_UNLOCK();
+	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
+	pci_restore_state(ppt->dev);
 	PPT_LOCK();
 
-	pci_restore_state(ppt->dev);
 	error = iommu_add_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
 	if (error != 0)
