@@ -134,6 +134,7 @@ enum prison_state {
 #define	JAIL_PARAM_CPUSET_ID		"cpuset.id"
 #define	JAIL_PARAM_OSRELDATE		"osreldate"
 #define	JAIL_PARAM_OSRELEASE		"osrelease"
+#define	JAIL_PARAM_OWNER		"owner"
 
 #define	JAIL_PARAM_HOST			"host"
 #define	JAIL_PARAM_HOST_HOSTNAME	"host.hostname"
@@ -302,7 +303,7 @@ struct prison {
 	int		 pr_devfs_rsnum;		/* (p) devfs ruleset */
 	enum prison_state pr_state;			/* (q) state in life cycle */
 	volatile int	 pr_exportcnt;			/* (r) count of mount exports */
-	int		 pr_spare;
+	uid_t		 pr_owner;			/* (p) owner uid */
 	int		 pr_osreldate;			/* (c) kern.osreldate value */
 	unsigned long	 pr_hostid;			/* (p) jail hostid */
 	char		 pr_name[MAXHOSTNAMELEN];	/* (p) admin jail name */
