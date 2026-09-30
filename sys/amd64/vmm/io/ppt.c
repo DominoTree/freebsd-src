@@ -90,7 +90,7 @@ struct pptseg {
 struct pptdev {
 	device_t	dev;
 	struct vm	*vm;			/* owner of this device */
-	bool		resetting;		/* guest FLR in progress */
+	bool		resetting;		/* reset in progress */
 	TAILQ_ENTRY(pptdev)	next;
 	struct pptseg mmio[MAX_MMIOSEGS];
 	struct {
@@ -196,7 +196,7 @@ ppt_detach(device_t dev)
 	ppt = device_get_softc(dev);
 
 	PPT_LOCK();
-	if (ppt->vm != NULL) {
+	if (ppt->vm != NULL || ppt->resetting) {
 		error = EBUSY;
 		goto out;
 	}
@@ -252,10 +252,10 @@ ppt_find(struct vm *vm, int bus, int slot, int func, struct pptdev **pptp)
 			break;
 		/*
 		 * Once resetting is set, every exit from ppt_reset_device()
-		 * reacquires ppt_mtx, clears resetting, and wakes us.  The FLR wait
-		 * itself is bounded.
+		 * and ppt_assign_device() reacquires ppt_mtx, clears resetting,
+		 * and wakes us. The wait itself is bounded.
 		 */
-		sx_sleep(ppt, &ppt_mtx, 0, "pptflr", 0);
+		sx_sleep(ppt, &ppt_mtx, 0, "pptrst", 0);
 	}
 
 	*pptp = ppt;
@@ -439,20 +439,29 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	/* Passing NULL requires the device to be unowned. */
 	error = ppt_find(NULL, bus, slot, func, &ppt);
 	if (error != 0)
-		goto out;
+		goto out_locked;
+
+	ppt->resetting = true;
 
 	pci_save_state(ppt->dev);
+
+	PPT_UNLOCK();
 	ppt_pci_reset(ppt->dev);
+	PPT_LOCK();
+
 	pci_restore_state(ppt->dev);
 	error = iommu_add_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
 	if (error != 0)
-		goto out;
+		goto out_reset;
 	ppt->vm = vm;
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	cmd |= PCIM_CMD_BUSMASTEREN | ppt_bar_enables(ppt);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
-out:
+out_reset:
+	ppt->resetting = false;
+	wakeup(ppt);
+out_locked:
 	PPT_UNLOCK();
 	return (error);
 }
