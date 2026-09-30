@@ -442,6 +442,7 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 		goto out_locked;
 
 	ppt->resetting = true;
+	ppt->vm = vm;
 
 	pci_save_state(ppt->dev);
 
@@ -454,11 +455,12 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	    pci_get_rid(ppt->dev));
 	if (error != 0)
 		goto out_reset;
-	ppt->vm = vm;
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	cmd |= PCIM_CMD_BUSMASTEREN | ppt_bar_enables(ppt);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 out_reset:
+	if (error != 0)
+		ppt->vm = NULL;
 	ppt->resetting = false;
 	wakeup(ppt);
 out_locked:
