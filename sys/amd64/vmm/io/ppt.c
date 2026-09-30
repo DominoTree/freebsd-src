@@ -196,7 +196,7 @@ ppt_detach(device_t dev)
 	ppt = device_get_softc(dev);
 
 	PPT_LOCK();
-	if (ppt->vm != NULL || ppt->resetting) {
+	if (ppt->vm != NULL) {
 		error = EBUSY;
 		goto out;
 	}
