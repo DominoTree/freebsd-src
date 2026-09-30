@@ -335,6 +335,49 @@ setaudit_body()
 	    allow.setaudit command=setaudit -m fr ls /
 }
 
+atf_test_case "owner" "cleanup"
+owner_head()
+{
+	atf_set descr 'Test the jail owner parameter'
+	atf_set require.user root
+	atf_set require.progs jail
+}
+
+owner_body()
+{
+	echo "ownerjail" >> jails.lst
+
+	# A new jail is owned by its creator, and root may change the owner.
+	atf_check jail -c name=ownerjail persist
+	atf_check -o inline:"0\n" jls -j ownerjail owner
+	atf_check jail -m name=ownerjail owner=1001
+	atf_check -o inline:"1001\n" jls -j ownerjail owner
+	atf_check -o inline:"owner=1001\n" jls -j ownerjail -n owner
+	atf_check jail -r ownerjail
+
+	atf_check jail -c name=ownerjail persist owner=1002 children.max=1
+	atf_check -o inline:"1002\n" jls -j ownerjail owner
+
+	# A jailed process may only set the owner to its own uid.
+	atf_check -s exit:1 -e match:"own uid" \
+	    jexec ownerjail jail -c name=child persist owner=1001
+	atf_check jexec ownerjail jail -c name=child persist
+	atf_check -o inline:"0\n" jls -j ownerjail.child owner
+	atf_check jail -m jid="$(jls -j ownerjail.child jid)" owner=1003
+	atf_check -o inline:"1003\n" jls -j ownerjail.child owner
+	atf_check -s exit:1 -e match:"own uid" \
+	    jexec ownerjail jail -m name=child owner=1004
+	# Restating the current owner, or taking the jail back, is allowed.
+	atf_check jexec ownerjail jail -m name=child owner=1003
+	atf_check jexec ownerjail jail -m name=child owner=0
+	atf_check -o inline:"0\n" jls -j ownerjail.child owner
+}
+
+owner_cleanup()
+{
+	clean_jails
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "basic"
@@ -344,4 +387,5 @@ atf_init_test_cases()
 	atf_add_test_case "jid_name_set"
 	atf_add_test_case "param_consistency"
 	atf_add_test_case "setaudit"
+	atf_add_test_case "owner"
 }

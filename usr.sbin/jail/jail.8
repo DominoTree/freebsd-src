@@ -26,7 +26,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd August 13, 2026
+.Dd September 29, 2026
 .Dt JAIL 8
 .Os
 .Sh NAME
@@ -435,6 +435,10 @@ A jail never has a lower securelevel than its parent system, but by
 setting this parameter it may have a higher one.
 If the system securelevel is changed, any jail securelevels will be at
 least as secure.
+.It Va owner
+The user ID that owns the jail.
+It defaults to the effective user ID of the process that created the jail.
+A jailed process may only set it to its own user ID.
 .It Va devfs_ruleset
 The number of the devfs ruleset that is enforced for mounting devfs in
 this jail.
