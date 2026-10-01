@@ -444,6 +444,7 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	ppt->resetting = true;
 	ppt->vm = vm;
 
+	/* Release the lock to allow for longer reset cycles */
 	PPT_UNLOCK();
 	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
