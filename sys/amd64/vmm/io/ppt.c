@@ -251,9 +251,10 @@ ppt_find(struct vm *vm, int bus, int slot, int func, struct pptdev **pptp)
 		if (!ppt->resetting)
 			break;
 		/*
-		 * Once resetting is set, every exit from ppt_reset_device()
-		 * and ppt_assign_device() reacquires ppt_mtx, clears resetting,
-		 * and wakes us. The wait itself is bounded.
+		 * Once resetting is set, every exit from ppt_reset_device(),
+		 * ppt_assign_device(), and ppt_unassign_device() reacquires
+		 * ppt_mtx, clears resetting, and wakes us. The wait itself
+		 * is bounded.
 		 */
 		sx_sleep(ppt, &ppt_mtx, 0, "pptrst", 0);
 	}
@@ -483,15 +484,23 @@ ppt_unassign_device(struct vm *vm, int bus, int slot, int func)
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
+	ppt->resetting = true;
+
+	/* Release the lock to allow for longer reset/teardown cycles */
+	PPT_UNLOCK();
 	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
 	pci_restore_state(ppt->dev);
 	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
+	PPT_LOCK();
+
 	error = iommu_remove_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
 	ppt->vm = NULL;
+	ppt->resetting = false;
+	wakeup(ppt);
 out:
 	PPT_UNLOCK();
 	return (error);
