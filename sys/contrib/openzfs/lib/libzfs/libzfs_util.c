@@ -35,6 +35,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <math.h>
+#include <pthread.h>
 #if LIBFETCH_DYNAMIC
 #include <dlfcn.h>
 #endif
@@ -1051,6 +1052,9 @@ libzfs_envvar_is_set(const char *envvar)
 	    (!strncasecmp(env, "ON", 2) && strnlen(env, 3) == 2)));
 }
 
+static pthread_mutex_t libzfs_btree_lock = PTHREAD_MUTEX_INITIALIZER;
+static int libzfs_btree_refcount;
+
 libzfs_handle_t *
 libzfs_init(void)
 {
@@ -1089,7 +1093,11 @@ libzfs_init(void)
 	vdev_prop_init();
 	libzfs_mnttab_init(hdl);
 	fletcher_4_init();
-	zfs_btree_init();
+
+	(void) pthread_mutex_lock(&libzfs_btree_lock);
+	if (libzfs_btree_refcount++ == 0)
+		zfs_btree_init();
+	(void) pthread_mutex_unlock(&libzfs_btree_lock);
 
 	if (getenv("ZFS_PROP_DEBUG") != NULL) {
 		hdl->libzfs_prop_debug = B_TRUE;
@@ -1134,7 +1142,13 @@ libzfs_fini(libzfs_handle_t *hdl)
 	libzfs_mnttab_fini(hdl);
 	libzfs_core_fini();
 	regfree(&hdl->libzfs_urire);
-	zfs_btree_fini();
+
+	(void) pthread_mutex_lock(&libzfs_btree_lock);
+	ASSERT3S(libzfs_btree_refcount, >, 0);
+	if (--libzfs_btree_refcount == 0)
+		zfs_btree_fini();
+	(void) pthread_mutex_unlock(&libzfs_btree_lock);
+
 	fletcher_4_fini();
 #if LIBFETCH_DYNAMIC
 	if (hdl->libfetch != (void *)-1 && hdl->libfetch != NULL)
