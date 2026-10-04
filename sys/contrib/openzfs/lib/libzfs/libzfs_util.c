@@ -1077,12 +1077,14 @@ libzfs_init(void)
 	}
 
 	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR|O_EXCL|O_CLOEXEC)) < 0) {
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
 
 	if (libzfs_core_init() != 0) {
 		(void) close(hdl->libzfs_fd);
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
@@ -1105,9 +1107,8 @@ libzfs_init(void)
 	if ((env = getenv("ZFS_SENDRECV_MAX_NVLIST")) != NULL) {
 		if ((error = zfs_nicestrtonum(hdl, env,
 		    &hdl->libzfs_max_nvlist))) {
+			libzfs_fini(hdl);
 			errno = error;
-			(void) close(hdl->libzfs_fd);
-			free(hdl);
 			return (NULL);
 		}
 	} else {
