@@ -197,6 +197,8 @@ int linker_ddb_search_symbol(caddr_t _value, c_linker_sym_t *_sym,
 int linker_ddb_symbol_values(c_linker_sym_t _sym, linker_symval_t *_symval);
 int linker_ddb_search_symbol_name(caddr_t value, char *buf, u_int buflen,
 				  long *offset);
+bool linker_ddb_lock(bool *_lockedp);
+void linker_ddb_unlock(bool _locked);
 
 /*
  * stack(9) helper for situations where kernel locking is required.
