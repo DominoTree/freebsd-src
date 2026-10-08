@@ -35,6 +35,7 @@
 #include <sys/cons.h>
 #include <sys/kdb.h>
 #include <sys/kernel.h>
+#include <sys/linker.h>
 #include <sys/malloc.h>
 #include <sys/lock.h>
 #include <sys/pcpu.h>
@@ -438,10 +439,13 @@ kdb_alt_break_gdb(int key, int *state)
 void
 kdb_backtrace(void)
 {
+	bool locked;
 
-	if (kdb_dbbe != NULL && kdb_dbbe->dbbe_trace != NULL) {
+	if (kdb_dbbe != NULL && kdb_dbbe->dbbe_trace != NULL &&
+	    linker_ddb_lock(&locked)) {
 		printf("KDB: stack backtrace:\n");
 		kdb_dbbe->dbbe_trace();
+		linker_ddb_unlock(locked);
 	}
 #ifdef STACK
 	else {
@@ -461,10 +465,13 @@ kdb_backtrace(void)
 void
 kdb_backtrace_thread(struct thread *td)
 {
+	bool locked;
 
-	if (kdb_dbbe != NULL && kdb_dbbe->dbbe_trace_thread != NULL) {
+	if (kdb_dbbe != NULL && kdb_dbbe->dbbe_trace_thread != NULL &&
+	    linker_ddb_lock(&locked)) {
 		printf("KDB: stack backtrace of thread %d:\n", td->td_tid);
 		kdb_dbbe->dbbe_trace_thread(td);
+		linker_ddb_unlock(locked);
 	}
 #ifdef STACK
 	else {

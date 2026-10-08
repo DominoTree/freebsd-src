@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 .\" DAMAGE.
 .\"
-.Dd March 6, 2022
+.Dd October 7, 2026
 .Dt STACK 9
 .Os
 .Sh NAME
@@ -114,14 +114,15 @@ may be used to print a stack trace using the kernel
 and may sleep as a result of acquiring
 .Xr sx 9
 locks in the kernel linker while looking up symbol names.
-In locking-sensitive environments, the unsynchronized
+In locking-sensitive environments, the
 .Fn stack_print_ddb
 and
 .Fn stack_print_short_ddb
 variants may be invoked.
-This function bypasses kernel linker locking, making it usable in
-.Xr ddb 4 ,
-but not in a live system where linker data structures may change.
+They never sleep: in
+.Xr ddb 4
+they bypass kernel linker locking, and elsewhere they omit symbol names while
+the kernel linker is busy.
 .Pp
 .Fn stack_sbuf_print
 may be used to construct a human-readable string, including conversion (where
@@ -138,10 +139,12 @@ This function may sleep if an auto-extending
 is used, or due to kernel linker locking.
 In locking-sensitive environments, such as
 .Xr ddb 4 ,
-the unsynchronized
+the
 .Fn stack_sbuf_print_ddb
-variant may be invoked to avoid kernel linker locking; it should be used with
-a fixed-length sbuf.
+variant may be invoked; like
+.Fn stack_print_ddb ,
+it does not sleep on kernel linker locks.
+It should be used with a fixed-length sbuf.
 .Pp
 The utility functions
 .Nm stack_zero ,
