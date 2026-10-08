@@ -1346,10 +1346,14 @@ link_elf_load_file(linker_class_t cls, const char* filename,
 	if (error != 0)
 		goto out;
 
-	ef->ddbsymcnt = symcnt / sizeof(Elf_Sym);
+	/* Unlocked ddb lookups may already see the dynamic symbols. */
+	atomic_store_long(&ef->ddbsymcnt, 0);
+	atomic_thread_fence_rel();
 	ef->ddbsymtab = (const Elf_Sym *)ef->symbase;
 	ef->ddbstrcnt = strcnt;
 	ef->ddbstrtab = ef->strbase;
+	atomic_thread_fence_rel();
+	atomic_store_long(&ef->ddbsymcnt, symcnt / sizeof(Elf_Sym));
 
 nosyms:
 
