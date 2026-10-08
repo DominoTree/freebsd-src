@@ -46,7 +46,8 @@ MALLOC_DEFINE(M_STACK, "stack", "Stack Traces");
 
 static int stack_symbol(vm_offset_t pc, char *namebuf, u_int buflen,
 	    long *offset, int flags);
-static int stack_symbol_ddb(vm_offset_t pc, const char **name, long *offset);
+static int stack_symbol_ddb(vm_offset_t pc, bool pinned, const char **name,
+	    long *offset);
 
 struct stack *
 stack_create(int flags)
@@ -130,14 +131,17 @@ stack_print_ddb(const struct stack *st)
 {
 	const char *name;
 	long offset;
+	bool locked, pinned;
 	int i;
 
 	KASSERT(st->depth <= STACK_MAX, ("bogus stack"));
+	pinned = linker_ddb_lock(&locked);
 	for (i = 0; i < st->depth; i++) {
-		stack_symbol_ddb(st->pcs[i], &name, &offset);
+		stack_symbol_ddb(st->pcs[i], pinned, &name, &offset);
 		printf("#%d %p at %s+%#lx\n", i, (void *)st->pcs[i],
 		    name, offset);
 	}
+	linker_ddb_unlock(locked);
 }
 
 #if defined(DDB) || defined(WITNESS)
@@ -146,18 +150,21 @@ stack_print_short_ddb(const struct stack *st)
 {
 	const char *name;
 	long offset;
+	bool locked, pinned;
 	int i;
 
 	KASSERT(st->depth <= STACK_MAX, ("bogus stack"));
+	pinned = linker_ddb_lock(&locked);
 	for (i = 0; i < st->depth; i++) {
 		if (i > 0)
 			printf(" ");
-		if (stack_symbol_ddb(st->pcs[i], &name, &offset) == 0)
+		if (stack_symbol_ddb(st->pcs[i], pinned, &name, &offset) == 0)
 			printf("%s+%#lx", name, offset);
 		else
 			printf("%p", (void *)st->pcs[i]);
 	}
 	printf("\n");
+	linker_ddb_unlock(locked);
 }
 #endif
 
@@ -209,14 +216,17 @@ stack_sbuf_print_ddb(struct sbuf *sb, const struct stack *st)
 {
 	const char *name;
 	long offset;
+	bool locked, pinned;
 	int i;
 
 	KASSERT(st->depth <= STACK_MAX, ("bogus stack"));
+	pinned = linker_ddb_lock(&locked);
 	for (i = 0; i < st->depth; i++) {
-		(void)stack_symbol_ddb(st->pcs[i], &name, &offset);
+		(void)stack_symbol_ddb(st->pcs[i], pinned, &name, &offset);
 		sbuf_printf(sb, "#%d %p at %s+%#lx\n", i, (void *)st->pcs[i],
 		    name, offset);
 	}
+	linker_ddb_unlock(locked);
 }
 #endif
 
@@ -228,6 +238,7 @@ stack_ktr(u_int mask, const char *file, int line, const struct stack *st,
 #ifdef DDB
 	const char *name;
 	long offset;
+	bool locked, pinned;
 	int i;
 #endif
 
@@ -235,11 +246,13 @@ stack_ktr(u_int mask, const char *file, int line, const struct stack *st,
 #ifdef DDB
 	if (depth == 0 || st->depth < depth)
 		depth = st->depth;
+	pinned = linker_ddb_lock(&locked);
 	for (i = 0; i < depth; i++) {
-		(void)stack_symbol_ddb(st->pcs[i], &name, &offset);
+		(void)stack_symbol_ddb(st->pcs[i], pinned, &name, &offset);
 		ktr_tracepoint(mask, file, line, "#%d %p at %s+%#lx",
 		    i, st->pcs[i], (u_long)name, offset, 0, 0);
 	}
+	linker_ddb_unlock(locked);
 #endif
 }
 #endif
@@ -265,12 +278,12 @@ stack_symbol(vm_offset_t pc, char *namebuf, u_int buflen, long *offset,
 }
 
 static int
-stack_symbol_ddb(vm_offset_t pc, const char **name, long *offset)
+stack_symbol_ddb(vm_offset_t pc, bool pinned, const char **name, long *offset)
 {
 	linker_symval_t symval;
 	c_linker_sym_t sym;
 
-	if (linker_ddb_search_symbol((caddr_t)pc, &sym, offset) != 0)
+	if (!pinned || linker_ddb_search_symbol((caddr_t)pc, &sym, offset) != 0)
 		goto out;
 	if (linker_ddb_symbol_values(sym, &symval) != 0)
 		goto out;

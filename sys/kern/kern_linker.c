@@ -40,6 +40,7 @@
 #include <sys/exterrvar.h>
 #include <sys/fcntl.h>
 #include <sys/jail.h>
+#include <sys/kdb.h>
 #include <sys/kernel.h>
 #include <sys/libkern.h>
 #include <sys/linker.h>
@@ -1142,8 +1143,42 @@ int
 linker_ddb_search_symbol_name(caddr_t value, char *buf, u_int buflen,
     long *offset)
 {
+	bool locked;
+	int error;
 
-	return (linker_debug_search_symbol_name(value, buf, buflen, offset));
+	if (!linker_ddb_lock(&locked))
+		return (EWOULDBLOCK);
+	error = linker_debug_search_symbol_name(value, buf, buflen, offset);
+	linker_ddb_unlock(locked);
+	return (error);
+}
+
+/*
+ * Outside the debugger, hold kld_sx across a lookup and any use of the
+ * names it returns.  Never sleeps; fails if the linker is busy.
+ */
+bool
+linker_ddb_lock(bool *lockedp)
+{
+
+	*lockedp = false;
+	if (kdb_active || SCHEDULER_STOPPED() || sx_xlocked(&kld_sx))
+		return (true);
+	/* Unlike sx_slock(), sx_try_slock() does not defer to a writer. */
+	if (TD_IS_IDLETHREAD(curthread) || (SX_READ_VALUE(&kld_sx) &
+	    (SX_LOCK_EXCLUSIVE_WAITERS | SX_LOCK_WRITE_SPINNER)) != 0 ||
+	    !sx_try_slock(&kld_sx))
+		return (false);
+	*lockedp = true;
+	return (true);
+}
+
+void
+linker_ddb_unlock(bool locked)
+{
+
+	if (locked)
+		sx_sunlock(&kld_sx);
 }
 
 /*
