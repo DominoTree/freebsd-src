@@ -822,6 +822,12 @@ aq_fw2x_get_thermal_limit(struct aq_hw* hw, int* limit_mc)
 
 #define AQ_CABLE_DIAG_POLLS	40		/* at hz/4 each, ten seconds */
 
+static bool
+aq_fw2x_cable_diag_supported(struct aq_hw *hw)
+{
+	return ((hw->fw_caps & FW2X_CAP_CABLE_DIAG) != 0);
+}
+
 static int
 aq_fw2x_cable_diag(struct aq_hw* hw, struct aq_hw_cable_diag* cd)
 {
@@ -916,6 +922,7 @@ const struct aq_firmware_ops aq_fw2x_ops =
 	.phy_reset = aq_fw2x_phy_reset,
 	.thermal_arm = aq_fw2x_thermal_arm,
 	.get_thermal_limit = aq_fw2x_get_thermal_limit,
+	.cable_diag_supported = aq_fw2x_cable_diag_supported,
 	.cable_diag = aq_fw2x_cable_diag,
 
 	.led_control = aq_fw2x_led_control,

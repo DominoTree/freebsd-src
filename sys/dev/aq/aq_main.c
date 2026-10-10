@@ -201,6 +201,7 @@ static void aq_if_vlan_unregister(if_ctx_t ctx, uint16_t vtag);
 /* Informational/diagnostic */
 static void	aq_if_led_func(if_ctx_t ctx, int onoff);
 static int	aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req);
+static int aq_if_link_diag(if_ctx_t ctx, struct iflinkdiag *diag, bool run);
 
 /* RSS */
 static int	aq_if_get_rss_key(if_ctx_t ctx, struct ifrsskey *ifrk);
@@ -275,6 +276,7 @@ static device_method_t aq_if_methods[] = {
 	/* Informational/diagnostic */
 	DEVMETHOD(ifdi_led_func, aq_if_led_func),
 	DEVMETHOD(ifdi_i2c_req, aq_if_i2c_req),
+	DEVMETHOD(ifdi_link_diag, aq_if_link_diag),
 
 	/* RSS */
 	DEVMETHOD(ifdi_get_rss_key, aq_if_get_rss_key),
@@ -1432,6 +1434,97 @@ aq_if_i2c_req(if_ctx_t ctx, struct ifi2creq *req)
 }
 
 static int
+aq_if_link_diag(if_ctx_t ctx, struct iflinkdiag *diag, bool run)
+{
+	static const uint8_t results[] = {
+		IFLD_R_OK,
+		IFLD_R_CROSSED,
+		IFLD_R_CROSSED,
+		IFLD_R_CROSSED,
+		IFLD_R_SHORT,
+		IFLD_R_LOWMISMATCH,
+		IFLD_R_HIGHMISMATCH,
+		IFLD_R_OPEN,
+	};
+	struct aq_dev *softc = iflib_get_softc(ctx);
+	struct aq_hw *hw = &softc->hw;
+	struct aq_hw_cable_diag cd;
+	struct aq_hw_fc_info fc = {};
+	bool valid, aq2;
+	int error, i;
+
+	if (softc->media_type != AQ_MEDIA_TYPE_TP || hw->fw_ops == NULL ||
+	    hw->fw_ops->cable_diag == NULL ||
+	    hw->fw_ops->cable_diag_supported == NULL ||
+	    !hw->fw_ops->cable_diag_supported(hw))
+		return (EOPNOTSUPP);
+	if (softc->init_failed)
+		return (ENXIO);
+
+	if (run) {
+		if (atomic_cmpset_int(&softc->cable_diag_busy, 0, 1) == 0)
+			return (EBUSY);
+		if (softc->linkup) {
+			device_printf(softc->dev,
+			    "link DOWN, cable diagnostic running\n");
+			softc->linkup = false;
+			softc->link_speed = 0;
+			iflib_link_state_change(ctx, LINK_STATE_DOWN, 0);
+			aq_mediastatus_update(softc, 0, &fc);
+		}
+		error = hw->fw_ops->cable_diag(hw, &cd);
+		if (error == 0) {
+			mtx_lock(&hw->fw_mtx);
+			softc->cable_diag = cd;
+			softc->cable_diag_valid = true;
+			mtx_unlock(&hw->fw_mtx);
+		}
+		atomic_store_rel_int(&softc->cable_diag_busy, 0);
+		iflib_admin_intr_deferred(ctx);
+		if (error != 0)
+			return (error);
+	}
+
+	diag->ifld_npairs = AQ_CABLE_PAIRS;
+	diag->ifld_flags = IFLD_F_DISRUPTIVE;
+	if (atomic_load_acq_int(&softc->cable_diag_busy) != 0)
+		diag->ifld_flags |= IFLD_F_RUNNING;
+	mtx_lock(&hw->fw_mtx);
+	cd = softc->cable_diag;
+	valid = softc->cable_diag_valid;
+	mtx_unlock(&hw->fw_mtx);
+	if (!valid)
+		return (0);
+
+	diag->ifld_flags |= IFLD_F_VALID;
+	aq2 = IS_CHIP_FEATURE(hw, ATLANTIC2);
+	for (i = 0; i < AQ_CABLE_PAIRS; i++) {
+		struct iflinkdiag_pair *pair = &diag->ifld_pair[i];
+		struct aq_hw_cable_pair *p = &cd.pair[i];
+
+		pair->ldp_result = p->result < nitems(results) ?
+		    results[p->result] :
+		    IFLD_R_UNKNOWN;
+		pair->ldp_peer = IFLD_PEER_NONE;
+		if (pair->ldp_result == IFLD_R_CROSSED)
+			pair->ldp_peer = (i + p->result) % AQ_CABLE_PAIRS;
+		if (pair->ldp_result == IFLD_R_OK ||
+		    pair->ldp_result == IFLD_R_UNKNOWN)
+			continue;
+		if (aq2 || p->dist != 0) {
+			pair->ldp_flags |= IFLD_PF_DISTANCE;
+			pair->ldp_distance = p->dist * 100;
+		}
+		if (aq2) {
+			pair->ldp_flags |= IFLD_PF_FAR_DISTANCE;
+			pair->ldp_far_distance = p->far_dist * 100;
+		}
+	}
+
+	return (0);
+}
+
+static int
 aq_hw_capabilities(struct aq_dev *softc)
 {
 
@@ -1638,6 +1731,7 @@ aq_sysctl_cable_diag(SYSCTL_HANDLER_ARGS)
 {
 	struct aq_dev   *softc = arg1;
 	struct aq_hw_cable_diag cd;
+	struct iflinkdiag diag = { .ifld_version = IFLD_VERSION };
 	struct sbuf     *sb;
 	bool            valid;
 	int             error, i;
@@ -1646,22 +1740,7 @@ aq_sysctl_cable_diag(SYSCTL_HANDLER_ARGS)
 		return (ENOTSUP);
 
 	if (req->newptr != NULL) {
-		/*
-		 * One run at a time.  The sequence spans tens of seconds of
-		 * hardware state, so a second caller would drive the same
-		 * registers mid-run and both would decode the wrong result;
-		 * the admin task must not reset the PHY under it either.
-		 */
-		if (atomic_cmpset_int(&softc->cable_diag_busy, 0, 1) == 0)
-			return (EBUSY);
-		error = softc->hw.fw_ops->cable_diag(&softc->hw, &cd);
-		if (error == 0) {
-			mtx_lock(&softc->hw.fw_mtx);
-			softc->cable_diag = cd;
-			softc->cable_diag_valid = true;
-			mtx_unlock(&softc->hw.fw_mtx);
-		}
-		atomic_store_rel_int(&softc->cable_diag_busy, 0);
+		error = iflib_link_diag(softc->ctx, &diag, true);
 		if (error != 0)
 			return (error);
 	}

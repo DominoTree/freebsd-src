@@ -4967,6 +4967,11 @@ iflib_if_ioctl(if_t ifp, u_long command, caddr_t data)
 			    sizeof(i2c));
 		break;
 	}
+	case SIOCGIFLINKDIAG:
+	case SIOCSIFLINKDIAG:
+		err = iflib_link_diag(ctx, (struct iflinkdiag *)data,
+		    command == SIOCSIFLINKDIAG);
+		break;
 	case SIOCSIFCAP:
 	{
 		int mask, setmask, oldmask;
@@ -7414,6 +7419,23 @@ iflib_ctx_lock_get(if_ctx_t ctx)
 {
 
 	return (&ctx->ifc_ctx_sx);
+}
+
+int
+iflib_link_diag(if_ctx_t ctx, struct iflinkdiag *diag, bool run)
+{
+	int error;
+
+	if (!sx_try_xlock(&ctx->ifc_ctx_sx))
+		return (EBUSY);
+	if (iflib_in_detach(ctx) || ctx->ifc_pm_state != IFLIB_PM_ACTIVE ||
+	    (ctx->ifc_flags & IFC_INIT_DONE) == 0)
+		error = ENXIO;
+	else
+		error = IFDI_LINK_DIAG(ctx, diag, run);
+	CTX_UNLOCK(ctx);
+
+	return (error);
 }
 
 static int

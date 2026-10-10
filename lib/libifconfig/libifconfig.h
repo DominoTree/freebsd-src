@@ -199,6 +199,11 @@ int ifconfig_get_groups(ifconfig_handle_t *h, const char *name,
     struct ifgroupreq *ifgr);
 int ifconfig_get_ifstatus(ifconfig_handle_t *h, const char *name,
     struct ifstat *stat);
+int ifconfig_linkdiag_get(ifconfig_handle_t *h, const char *name,
+    struct iflinkdiag *diag);
+int ifconfig_linkdiag_run(ifconfig_handle_t *h, const char *name,
+    struct iflinkdiag *diag);
+const char *ifconfig_linkdiag_result_string(uint8_t result);
 
 /*
  * SR-IOV VF status schema contract.

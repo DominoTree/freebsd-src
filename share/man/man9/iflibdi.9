@@ -1,4 +1,4 @@
-.Dd September 11, 2026
+.Dd October 9, 2026
 .Dt IFLIBDI 9
 .Os
 .Sh NAME
@@ -95,6 +95,12 @@
 .Ft bool
 .Fo iflib_is_running
 .Fa "if_ctx_t ctx"
+.Fc
+.Ft int
+.Fo iflib_link_diag
+.Fa "if_ctx_t ctx"
+.Fa "struct iflinkdiag *diag"
+.Fa "bool run"
 .Fc
 .Ft void
 .Fo iflib_add_int_delay_sysctl
@@ -287,6 +293,23 @@ Drivers should use this accessor instead of reading
 .Dv IFF_DRV_RUNNING
 for software run-state checks, and must not modify the driver flags.
 Iflib continues to publish the legacy driver flags for network-stack consumers.
+.It Fn iflib_link_diag
+Call
+.Fn ifdi_link_diag
+with the context lock held.
+The caller must hold a valid context reference and must not hold its lock.
+Initialize
+.Fa diag
+to zero and set its version to
+.Dv IFLD_VERSION .
+This function returns
+.Er EBUSY
+instead of waiting for a busy context lock, allowing driver sysctl handlers
+to avoid deadlocking with detach.
+It returns
+.Er ENXIO
+when attachment is incomplete or the device is suspending, suspended,
+or detaching.
 .It Fn iflib_add_int_delay_sysctl
 Modifies settings to user defined values for a given set of variables.
 .El

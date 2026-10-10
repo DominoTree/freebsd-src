@@ -16,6 +16,7 @@ SRCS=		libifconfig.c \
 		libifconfig_inet6.c \
 		libifconfig_internal.c \
 		libifconfig_lagg.c \
+		libifconfig_linkdiag.c \
 		libifconfig_media.c \
 		libifconfig_nl.c \
 		libifconfig_sfp.c

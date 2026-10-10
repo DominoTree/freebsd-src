@@ -614,6 +614,47 @@ struct ifi2creq {
 	uint8_t data[8];	/* read buffer */
 }; 
 
+#define IFLD_VERSION	     1
+#define IFLD_MAXPAIRS	     4
+
+#define IFLD_R_UNKNOWN	     0
+#define IFLD_R_OK	     1
+#define IFLD_R_OPEN	     2
+#define IFLD_R_SHORT	     3
+#define IFLD_R_CROSSED	     4
+#define IFLD_R_LOWMISMATCH   5
+#define IFLD_R_HIGHMISMATCH  6
+#define IFLD_R_BUSY	     7
+#define IFLD_R_FAILED	     8
+#define IFLD_R_CROSSSHORT    9
+
+#define IFLD_PF_DISTANCE     0x01
+#define IFLD_PF_FAR_DISTANCE 0x02
+#define IFLD_PEER_NONE	     0xff
+
+struct iflinkdiag_pair {
+	uint8_t ldp_result;
+	uint8_t ldp_flags;
+	uint8_t ldp_peer;
+	uint8_t ldp_spare0;
+	uint32_t ldp_distance;	   /* centimetres */
+	uint32_t ldp_far_distance; /* centimetres */
+	uint32_t ldp_spare;
+};
+
+#define IFLD_F_VALID	  0x01
+#define IFLD_F_RUNNING	  0x02
+#define IFLD_F_DISRUPTIVE 0x04
+
+struct iflinkdiag {
+	char ifld_name[IFNAMSIZ];
+	uint32_t ifld_version;
+	uint32_t ifld_flags;
+	uint32_t ifld_npairs;
+	uint32_t ifld_spare[5];
+	struct iflinkdiag_pair ifld_pair[IFLD_MAXPAIRS];
+};
+
 /*
  * RSS hash.
  */

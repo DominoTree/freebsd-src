@@ -103,6 +103,13 @@ CODE {
 	}
 
 	static int
+	null_link_diag(if_ctx_t _ctx __unused,
+	    struct iflinkdiag *_diag __unused, bool _run __unused)
+	{
+		return (EOPNOTSUPP);
+	}
+
+	static int
 	null_sysctl_int_delay(if_ctx_t _sctx __unused, if_int_delay_info_t _iidi __unused)
 	{
 		return (0);
@@ -402,6 +409,12 @@ METHOD int i2c_req {
 	if_ctx_t _ctx;
 	struct ifi2creq *_req;
 } DEFAULT null_i2c_req;
+
+METHOD int link_diag {
+	if_ctx_t _ctx;
+	struct iflinkdiag *_diag;
+	bool _run;
+} DEFAULT null_link_diag;
 
 METHOD int txq_setup {
 	if_ctx_t _ctx;

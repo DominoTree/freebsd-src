@@ -51,8 +51,8 @@
 
 #include "ifconfig.h"
 
-void
-sfp_status(if_ctx *ctx)
+static bool
+sfp_print(if_ctx *ctx)
 {
 	struct ifconfig_sfp_info info;
 	struct ifconfig_sfp_info_strings strings;
@@ -62,7 +62,7 @@ sfp_status(if_ctx *ctx)
 	int verbose = ctx->args->verbose;
 
 	if (ifconfig_sfp_get_sfp_info(lifh, ctx->ifname, &info) == -1)
-		return;
+		return (false);
 
 	ifconfig_sfp_get_sfp_info_strings(&info, &strings);
 
@@ -72,7 +72,7 @@ sfp_status(if_ctx *ctx)
 	    strings.sfp_conn);
 
 	if (ifconfig_sfp_get_sfp_vendor_info(lifh, ctx->ifname, &vendor_info) == -1)
-		return;
+		return (true);
 
 	printf("\tvendor: %s PN: %s SN: %s DATE: %s\n",
 	    vendor_info.name, vendor_info.pn, vendor_info.sn, vendor_info.date);
@@ -113,7 +113,7 @@ sfp_status(if_ctx *ctx)
 		struct ifconfig_sfp_dump dump;
 
 		if (ifconfig_sfp_get_sfp_dump(lifh, ctx->ifname, &dump) == -1)
-			return;
+			return (true);
 
 		if (ifconfig_sfp_id_is_cmis(info.sfp_id)) {
 			printf("\n\tCMIS DUMP (Lower Memory 0..127):\n");
@@ -143,4 +143,22 @@ sfp_status(if_ctx *ctx)
 			    "\t", HD_OMIT_COUNT | HD_OMIT_CHARS);
 		}
 	}
+	return (true);
+}
+
+void
+sfp_status(if_ctx *ctx)
+{
+	(void)sfp_print(ctx);
+}
+
+bool
+sfp_linkdiag(if_ctx *ctx)
+{
+	struct ifconfig_args args = *ctx->args;
+	if_ctx sfp_ctx = *ctx;
+
+	args.verbose = 1;
+	sfp_ctx.args = &args;
+	return (sfp_print(&sfp_ctx));
 }

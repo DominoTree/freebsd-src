@@ -664,6 +664,16 @@ aq2_fw_get_phy_hot_warning(struct aq_hw *hw, bool *hot)
 #define	AQ2_CABLE_DIAG_WAIT_SECS	10
 #define	AQ2_CABLE_DIAG_POLLS		120	/* at hz/4 each, thirty seconds */
 
+static bool
+aq2_fw_cable_diag_supported(struct aq_hw *hw)
+{
+	uint32_t caps;
+
+	caps = AQ_READ_REG(hw, AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_REG);
+	return (caps != UINT32_MAX &&
+	    (caps & AQ2_FW_INTERFACE_OUT_DEVICE_CAPS_CABLE_DIAG) != 0);
+}
+
 static void
 aq2_fw_cable_diag_arm(struct aq_hw *hw, bool run)
 {
@@ -768,6 +778,7 @@ const struct aq_firmware_ops aq2_fw_ops = {
 	.get_temp = aq2_fw_get_temp,
 	.get_phy_fault = aq2_fw_get_phy_fault,
 	.get_phy_hot_warning = aq2_fw_get_phy_hot_warning,
+	.cable_diag_supported = aq2_fw_cable_diag_supported,
 	.cable_diag = aq2_fw_cable_diag,
 	.phy_reset = NULL,	/* A2 clears thermal shutdown on its own reset */
 	.thermal_arm = aq2_fw_thermal_arm,

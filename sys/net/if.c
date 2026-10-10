@@ -2914,6 +2914,24 @@ ifhwioctl(u_long cmd, struct ifnet *ifp, caddr_t data, struct thread *td)
 		break;
 	}
 
+	case SIOCSIFLINKDIAG:
+		error = priv_check(td, PRIV_NET_HWIOCTL);
+		if (error != 0)
+			return (error);
+		/* FALLTHROUGH */
+	case SIOCGIFLINKDIAG: {
+		struct iflinkdiag *diag = (struct iflinkdiag *)data;
+
+		if (diag->ifld_version != IFLD_VERSION)
+			return (EINVAL);
+		if (ifp->if_ioctl == NULL)
+			return (EOPNOTSUPP);
+		memset(&diag->ifld_flags, 0,
+		    sizeof(*diag) - __offsetof(struct iflinkdiag, ifld_flags));
+		error = (*ifp->if_ioctl)(ifp, cmd, data);
+		break;
+	}
+
 	case SIOCSIFPHYADDR:
 	case SIOCDIFPHYADDR:
 #ifdef INET6

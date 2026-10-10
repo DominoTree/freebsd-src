@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 9, 2026
 .Dt IFLIBDD 9
 .Os
 .Sh NAME
@@ -195,6 +195,12 @@
 .Fa "struct ifi2creq *req"
 .Fc
 .Ft int
+.Fo ifdi_link_diag
+.Fa "if_ctx_t ctx"
+.Fa "struct iflinkdiag *diag"
+.Fa "bool run"
+.Fc
+.Ft int
 .Fo ifdi_get_rss_key
 .Fa "if_ctx_t ctx"
 .Fa "struct ifrsskey *key"
@@ -389,6 +395,30 @@ Optional function to run when a transmit queue is hung.
 .It Fn ifdi_led_func
 .It Fn ifdi_sysctl_int_delay
 .It Fn ifdi_i2c_req
+.It Fn ifdi_link_diag
+Optional function for
+.Dv SIOCGIFLINKDIAG
+and
+.Dv SIOCSIFLINKDIAG .
+When
+.Fa run
+is true, perform the test synchronously and return its result.
+Otherwise report supported features and the cached result without starting
+a test.
+The context lock is held and the callback may sleep.
+A disruptive test must report link-down before testing and refresh the
+physical link state afterward.
+Use
+.Fn iflib_link_diag
+for driver sysctl entry points so they share the ioctl's lifecycle locking.
+The payload and validity flags are described in
+.Xr netintro 4 .
+Drivers outside iflib can handle the same requests in
+.Fn if_ioctl ;
+the network stack checks the version and run privilege and clears the output
+fields before dispatch.
+The default callback returns
+.Er EOPNOTSUPP .
 .It Fn ifdi_get_rss_key
 Optional function that reports the hash function, key length and key the
 device is programmed with, for

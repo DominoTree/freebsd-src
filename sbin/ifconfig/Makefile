@@ -27,6 +27,7 @@ SRCS+=	ifstf.c			# STF configuration options
 SRCS+=	ifclone.c		# clone device support
 SRCS+=	ifmac.c			# MAC support
 SRCS+=	ifmedia.c		# SIOC[GS]IFMEDIA support
+SRCS+=	iflinkdiag.c		# link diagnostics
 SRCS+=	iffib.c			# non-default FIB support
 SRCS+=	ifrss.c			# SIOC[GS]IFRSS* support
 SRCS+=	ifvlan.c		# SIOC[GS]ETVLAN support

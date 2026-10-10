@@ -1,10 +1,14 @@
 NETBSD_ATF_TESTS_SH=	nonexistent_test
 ATF_TESTS_SH+=		ifconfig \
 			inet6 \
+			linkdiag \
 			rss
 
 TEST_METADATA+=	execenv="jail"
 TEST_METADATA+=	execenv_jail_params="vnet allow.raw_sockets"
+TEST_METADATA.linkdiag+= execenv="host"
+
+SUBDIR+=	linkdiag_mock
 
 .include <netbsd-tests.test.mk>
 .include <bsd.test.mk>

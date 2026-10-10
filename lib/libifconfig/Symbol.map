@@ -89,4 +89,7 @@ FBSD_1.6 {
 FBSD_1.9 {
 	ifconfig_free_vf_status;
 	ifconfig_get_vf_status;
+	ifconfig_linkdiag_get;
+	ifconfig_linkdiag_result_string;
+	ifconfig_linkdiag_run;
 };

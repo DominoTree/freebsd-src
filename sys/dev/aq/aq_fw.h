@@ -83,6 +83,7 @@ struct aq_firmware_ops
 	/* Reports the pre-shutdown PHY over-temperature warning. */
 	int (*get_phy_hot_warning)(struct aq_hw* hw, bool* hot);
 
+	bool (*cable_diag_supported)(struct aq_hw *hw);
 	/* Runs a cable diagnostic; sleeps, and disturbs an established link. */
 	int (*cable_diag)(struct aq_hw* hw, struct aq_hw_cable_diag* cd);
 

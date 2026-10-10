@@ -156,4 +156,7 @@
 #define	SIOCSIFRSSTABLE	 _IOW('i', 164, struct ifrsstable) /* set RSS table */
 #define	SIOCSIFRSSKEY	 _IOW('i', 165, struct ifrsskey)  /* set RSS key */
 
+#define SIOCGIFLINKDIAG		_IOWR('i', 166, struct iflinkdiag) /* get link test */
+#define SIOCSIFLINKDIAG		_IOWR('i', 167, struct iflinkdiag) /* run link test */
+
 #endif /* !_SYS_SOCKIO_H_ */
