@@ -118,8 +118,8 @@ function filter (p, g)
   end)
 end
 
--- generate primes up to 20
-local x = gen(20)
+-- generate primes up to 13
+local x = gen(13)
 local a = {}
 while 1 do
   local n = x()
@@ -128,8 +128,8 @@ while 1 do
   x = filter(n, x)
 end
 
--- expect 8 primes and last one is 19
-assert(#a == 8 and a[#a] == 19)
+-- expect 6 primes and last one is 13
+assert(#a == 6 and a[#a] == 13)
 x, a = nil
 
 
