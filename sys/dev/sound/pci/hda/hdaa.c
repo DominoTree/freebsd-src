@@ -7069,7 +7069,7 @@ hdaa_pcm_attach(device_t dev)
 	struct hdaa_audio_as *as;
 	struct snddev_info *d;
 	char status[SND_STATUSLEN];
-	int i;
+	int error, i;
 
 	pdevinfo->chan_size = pcm_getbuffersize(dev,
 	    HDA_BUFSZ_MIN, HDA_BUFSZ_DEFAULT, HDA_BUFSZ_MAX);
@@ -7133,30 +7133,15 @@ hdaa_pcm_attach(device_t dev)
 		for (i = 0; i < as->num_chans; i++)
 			pcm_addchan(dev, PCMDIR_PLAY, &hdaa_channel_class,
 			    &devinfo->chans[as->chans[i]]);
-		SYSCTL_ADD_PROC(&d->play_sysctl_ctx,
-		    SYSCTL_CHILDREN(d->play_sysctl_tree), OID_AUTO,
-		    "32bit", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
-		    as, sizeof(as), hdaa_sysctl_32bit, "I",
-		    "Resolution of 32bit samples (20/24/32bit)");
 	}
 	if (pdevinfo->recas >= 0) {
 		as = &devinfo->as[pdevinfo->recas];
 		for (i = 0; i < as->num_chans; i++)
 			pcm_addchan(dev, PCMDIR_REC, &hdaa_channel_class,
 			    &devinfo->chans[as->chans[i]]);
-		SYSCTL_ADD_PROC(&d->rec_sysctl_ctx,
-		    SYSCTL_CHILDREN(d->rec_sysctl_tree), OID_AUTO,
-		    "32bit", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
-		    as, sizeof(as), hdaa_sysctl_32bit, "I",
-		    "Resolution of 32bit samples (20/24/32bit)");
 		pdevinfo->autorecsrc = 2;
 		resource_int_value(device_get_name(dev), device_get_unit(dev),
 		    "rec.autosrc", &pdevinfo->autorecsrc);
-		SYSCTL_ADD_INT(&d->rec_sysctl_ctx,
-		    SYSCTL_CHILDREN(d->rec_sysctl_tree), OID_AUTO,
-		    "autosrc", CTLFLAG_RW,
-		    &pdevinfo->autorecsrc, 0,
-		    "Automatic recording source selection");
 	}
 
 	if (pdevinfo->mixer != NULL) {
@@ -7177,7 +7162,33 @@ hdaa_pcm_attach(device_t dev)
 	snprintf(status, SND_STATUSLEN, "on %s",
 	    device_get_nameunit(device_get_parent(dev)));
 
-	return (pcm_register(dev, status));
+	error = pcm_register(dev, status);
+	if (error != 0)
+		return (error);
+
+	if (pdevinfo->playas >= 0) {
+		as = &devinfo->as[pdevinfo->playas];
+		SYSCTL_ADD_PROC(&d->play_sysctl_ctx,
+		    SYSCTL_CHILDREN(d->play_sysctl_tree), OID_AUTO,
+		    "32bit", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    as, sizeof(as), hdaa_sysctl_32bit, "I",
+		    "Resolution of 32bit samples (20/24/32bit)");
+	}
+	if (pdevinfo->recas >= 0) {
+		as = &devinfo->as[pdevinfo->recas];
+		SYSCTL_ADD_PROC(&d->rec_sysctl_ctx,
+		    SYSCTL_CHILDREN(d->rec_sysctl_tree), OID_AUTO,
+		    "32bit", CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    as, sizeof(as), hdaa_sysctl_32bit, "I",
+		    "Resolution of 32bit samples (20/24/32bit)");
+		SYSCTL_ADD_INT(&d->rec_sysctl_ctx,
+		    SYSCTL_CHILDREN(d->rec_sysctl_tree), OID_AUTO,
+		    "autosrc", CTLFLAG_RW,
+		    &pdevinfo->autorecsrc, 0,
+		    "Automatic recording source selection");
+	}
+
+	return (0);
 }
 
 static int
