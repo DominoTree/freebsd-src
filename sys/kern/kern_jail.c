@@ -2809,7 +2809,7 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 		goto done;
 #ifdef INET
 	error = vfs_setopt_part(opts, JAIL_PARAM_IP4_ADDR,
-	    pr->pr_addrs[PR_INET]->pr_ip,
+	    pr->pr_addrs[PR_INET] ? pr->pr_addrs[PR_INET]->pr_ip : NULL,
 	    pr->pr_addrs[PR_INET] ? pr->pr_addrs[PR_INET]->ips *
 	    pr_families[PR_INET].size : 0 );
 	if (error != 0 && error != ENOENT)
@@ -2817,7 +2817,7 @@ kern_jail_get(struct thread *td, struct uio *optuio, int flags)
 #endif
 #ifdef INET6
 	error = vfs_setopt_part(opts, JAIL_PARAM_IP6_ADDR,
-	    pr->pr_addrs[PR_INET6]->pr_ip,
+	    pr->pr_addrs[PR_INET6] ? pr->pr_addrs[PR_INET6]->pr_ip : NULL,
 	    pr->pr_addrs[PR_INET6] ? pr->pr_addrs[PR_INET6]->ips *
 	    pr_families[PR_INET6].size : 0 );
 	if (error != 0 && error != ENOENT)
