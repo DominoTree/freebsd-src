@@ -409,7 +409,7 @@ typedef struct iflib_sw_tx_desc_array {
 #define	IFC_DO_RESET		0x080
 #define	IFC_DO_WATCHDOG		0x100
 #define	IFC_DO_RESET_IF_UP	0x200
-#define	IFC_SPARE2		0x400
+#define	IFC_DO_RESET_IF_RUNNING	0x400
 #define	IFC_IN_DETACH		0x800
 
 #define	IFC_NETMAP_TX_IRQ	0x80000000
@@ -4501,16 +4501,17 @@ _task_fn_admin(void *context, int pending)
 	if_softc_ctx_t sctx = &ctx->ifc_softc_ctx;
 	iflib_txq_t txq;
 	int i;
-	bool do_reset, do_reset_if_up, do_watchdog;
+	bool do_reset, do_reset_if_up, do_reset_if_running, do_watchdog;
 	bool in_detach;
 
 	STATE_LOCK(ctx);
 	do_reset = (ctx->ifc_flags & IFC_DO_RESET);
 	do_reset_if_up = (ctx->ifc_flags & IFC_DO_RESET_IF_UP);
+	do_reset_if_running = (ctx->ifc_flags & IFC_DO_RESET_IF_RUNNING);
 	do_watchdog = (ctx->ifc_flags & IFC_DO_WATCHDOG);
 	in_detach = (ctx->ifc_flags & IFC_IN_DETACH);
 	ctx->ifc_flags &= ~(IFC_DO_RESET | IFC_DO_RESET_IF_UP |
-	    IFC_DO_WATCHDOG);
+	    IFC_DO_RESET_IF_RUNNING | IFC_DO_WATCHDOG);
 	STATE_UNLOCK(ctx);
 
 	if (in_detach)
@@ -4529,6 +4530,8 @@ _task_fn_admin(void *context, int pending)
 	}
 	if (!do_reset && do_reset_if_up &&
 	    (if_getflags(ctx->ifc_ifp) & IFF_UP) != 0)
+		do_reset = true;
+	if (!do_reset && do_reset_if_running && iflib_is_running(ctx))
 		do_reset = true;
 	for (txq = ctx->ifc_txqs, i = 0; i < sctx->isc_ntxqsets; i++, txq++) {
 		CALLOUT_LOCK(txq);
@@ -7915,6 +7918,15 @@ iflib_request_reset_if_up(if_ctx_t ctx)
 
 	STATE_LOCK(ctx);
 	ctx->ifc_flags |= IFC_DO_RESET_IF_UP;
+	STATE_UNLOCK(ctx);
+}
+
+void
+iflib_request_reset_if_running(if_ctx_t ctx)
+{
+
+	STATE_LOCK(ctx);
+	ctx->ifc_flags |= IFC_DO_RESET_IF_RUNNING;
 	STATE_UNLOCK(ctx);
 }
 

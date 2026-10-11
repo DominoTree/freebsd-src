@@ -264,7 +264,7 @@ aq_thermal_poll(struct aq_dev *aq_dev)
 	    "link\n", aq_dev->thermal_temp_mc / 1000);
 	aq_dev->thermal_state = AQ_THERMAL_NORMAL;
 	aq_dev->reset_pending = true;
-	iflib_request_reset(aq_dev->ctx);
+	iflib_request_reset_if_running(aq_dev->ctx);
 	iflib_admin_intr_deferred(aq_dev->ctx);
 }
 
@@ -409,7 +409,7 @@ aq_if_update_admin_status(if_ctx_t ctx)
 		if (aq_dev->init_retries < AQ_INIT_MAX_RETRIES) {
 			aq_dev->init_retries++;
 			aq_dev->reset_pending = true;
-			iflib_request_reset(ctx);
+			iflib_request_reset_if_running(ctx);
 		} else if (aq_dev->init_retries == AQ_INIT_MAX_RETRIES) {
 			aq_dev->init_retries++;
 			device_printf(aq_dev->dev, "initialization failed; "
