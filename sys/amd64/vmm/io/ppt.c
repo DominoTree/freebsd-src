@@ -482,9 +482,9 @@ ppt_unassign_device(struct vm *vm, int bus, int slot, int func)
 	if (error != 0)
 		goto out;
 
+	/* Mask INTx before MSI teardown (PCI_QUIRK_MSI_INTX_BUG leaves it clear). */
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	cmd |= PCIM_CMD_INTxDIS;
-	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	ppt->resetting = true;
 
@@ -493,6 +493,9 @@ ppt_unassign_device(struct vm *vm, int bus, int slot, int func)
 	ppt_unmap_all_mmio(vm, ppt);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
+	/* Gate decode and DMA after MSI-X teardown, which writes the table BAR. */
+	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
+	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
 	pci_restore_state(ppt->dev);
@@ -540,13 +543,15 @@ ppt_reset_device(struct vm *vm, int bus, int slot, int func)
 	/*
 	 * Disable physical INTx before releasing its handler.  This also makes
 	 * an asserted Function send Deassert_INTx before FLR, as required by
-	 * PCIe.  Gate decoding and DMA before tearing down MSI or MSI-X.
+	 * PCIe.
 	 */
 	cmd = original_cmd | PCIM_CMD_INTxDIS;
-	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
+	/* Gate decode and DMA after MSI-X teardown, which writes the table BAR. */
+	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
+	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 
 	/*
 	 * Save the host-owned state after interrupt teardown, then restore BARs
