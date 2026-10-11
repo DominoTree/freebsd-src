@@ -83,9 +83,7 @@
 #include <vm/uma_int.h>
 #include <vm/uma_dbg.h>
 
-#ifdef DEBUG_MEMGUARD
 #include <vm/memguard.h>
-#endif
 #ifdef DEBUG_REDZONE
 #include <vm/redzone.h>
 #endif
@@ -674,7 +672,7 @@ void *
 	    ("malloc(M_WAITOK) returned NULL"));
 
 #ifdef DEBUG_REDZONE
-	if (va != NULL)
+	if (va != NULL && !is_memguard_addr(va))
 		va = redzone_setup(va, osize);
 #endif
 #ifdef KASAN
@@ -749,7 +747,7 @@ malloc_domainset(size_t size, struct malloc_type *mtp, struct domainset *ds,
 	    ("malloc(M_WAITOK) returned NULL"));
 
 #ifdef DEBUG_REDZONE
-	if (va != NULL)
+	if (va != NULL && !is_memguard_addr(va))
 		va = redzone_setup(va, osize);
 #endif
 #ifdef KASAN
