@@ -666,7 +666,9 @@ void *
 		va = uma_zalloc_arg(zone, zone, flags);
 		if (va != NULL)
 			size = zone->uz_size;
-		malloc_type_zone_allocated(mtp, va == NULL ? 0 : size, indx);
+		if (!is_memguard_addr(va))
+			malloc_type_zone_allocated(mtp,
+			    va == NULL ? 0 : size, indx);
 	}
 	KASSERT(va != NULL || (flags & M_WAITOK) == 0,
 	    ("malloc(M_WAITOK) returned NULL"));
@@ -741,7 +743,9 @@ malloc_domainset(size_t size, struct malloc_type *mtp, struct domainset *ds,
 			} while (va == NULL &&
 			    vm_domainset_iter_policy(&di, &domain) == 0);
 		}
-		malloc_type_zone_allocated(mtp, va == NULL ? 0 : size, indx);
+		if (!is_memguard_addr(va))
+			malloc_type_zone_allocated(mtp,
+			    va == NULL ? 0 : size, indx);
 	}
 	KASSERT(va != NULL || (flags & M_WAITOK) == 0,
 	    ("malloc(M_WAITOK) returned NULL"));
