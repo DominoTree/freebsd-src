@@ -1,4 +1,4 @@
-.Dd September 11, 2026
+.Dd October 11, 2026
 .Dt IFLIBDI 9
 .Os
 .Sh NAME
@@ -86,6 +86,10 @@
 .Fc
 .Ft void
 .Fo iflib_request_reset_if_up
+.Fa "if_ctx_t ctx"
+.Fc
+.Ft void
+.Fo iflib_request_reset_if_running
 .Fa "if_ctx_t ctx"
 .Fc
 .Ft void
@@ -253,6 +257,14 @@ Like
 .Fn iflib_request_reset ,
 this function only records the request; the caller must schedule the admin
 task, normally with
+.Fn iflib_admin_intr_deferred .
+.It Fn iflib_request_reset_if_running
+Request that the admin task stop and reinitialize the interface only if its
+datapath is still running when the task runs.
+This includes native netmap operation with
+.Dv IFF_UP
+clear.
+The caller must schedule the admin task with
 .Fn iflib_admin_intr_deferred .
 .It Fn iflib_init_failed
 Report that the current
