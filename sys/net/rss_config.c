@@ -518,6 +518,38 @@ rss_gethashconfig(void)
 }
 
 /*
+ * Translate an RSS_HASHTYPE_ mask to the RSS_TYPE_ mask reported by
+ * SIOCGIFRSSHASH.
+ */
+uint32_t
+rss_hashconfig_to_iftypes(u_int hashconfig)
+{
+	static const struct {
+		u_int		hashtype;
+		uint32_t	iftype;
+	} map[] = {
+		{ RSS_HASHTYPE_RSS_IPV4,	RSS_TYPE_IPV4 },
+		{ RSS_HASHTYPE_RSS_TCP_IPV4,	RSS_TYPE_TCP_IPV4 },
+		{ RSS_HASHTYPE_RSS_IPV6,	RSS_TYPE_IPV6 },
+		{ RSS_HASHTYPE_RSS_IPV6_EX,	RSS_TYPE_IPV6_EX },
+		{ RSS_HASHTYPE_RSS_TCP_IPV6,	RSS_TYPE_TCP_IPV6 },
+		{ RSS_HASHTYPE_RSS_TCP_IPV6_EX,	RSS_TYPE_TCP_IPV6_EX },
+		{ RSS_HASHTYPE_RSS_UDP_IPV4,	RSS_TYPE_UDP_IPV4 },
+		{ RSS_HASHTYPE_RSS_UDP_IPV6,	RSS_TYPE_UDP_IPV6 },
+		{ RSS_HASHTYPE_RSS_UDP_IPV6_EX,	RSS_TYPE_UDP_IPV6_EX },
+	};
+	uint32_t iftypes;
+	u_int i;
+
+	iftypes = 0;
+	for (i = 0; i < nitems(map); i++) {
+		if ((hashconfig & map[i].hashtype) != 0)
+			iftypes |= map[i].iftype;
+	}
+	return (iftypes);
+}
+
+/*
  * XXXRW: Confirm that sysctl -a won't dump this keying material, don't want
  * it appearing in debugging output unnecessarily.
  */
