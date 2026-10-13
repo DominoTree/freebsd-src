@@ -792,8 +792,10 @@ linux_common_wait(struct thread *td, idtype_t idtype, int id, int *statusp,
 	if (error == 0 && statusp) {
 		tmpstat = status & 0xffff;
 		if (WIFSIGNALED(tmpstat)) {
-			tmpstat = (tmpstat & 0xffffff80) |
-			    bsd_to_linux_signal(WTERMSIG(tmpstat));
+			sig = bsd_to_linux_signal(WTERMSIG(tmpstat));
+			if (sig == 0)
+				sig = LINUX_SIGKILL;
+			tmpstat = (tmpstat & 0xffffff80) | sig;
 		} else if (WIFSTOPPED(tmpstat)) {
 			tmpstat = (tmpstat & 0xffff00ff) |
 			    (bsd_to_linux_signal(WSTOPSIG(tmpstat)) << 8);

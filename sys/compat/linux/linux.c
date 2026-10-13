@@ -168,12 +168,16 @@ int
 bsd_to_linux_signal(int sig)
 {
 
+	if (sig <= 0)
+		return (0);
 	if (sig <= LINUX_SIGTBLSZ)
 		return (bsd_to_linux_sigtbl[_SIG_IDX(sig)]);
 	if (sig == LINUX_SIGPWREMU)
 		return (LINUX_SIGPWR);
+	if (sig >= SIGRTMIN && sig < LINUX_SIGPWREMU)
+		return (bsd_to_linux_rt_signal(sig));
 
-	return (bsd_to_linux_rt_signal(sig));
+	return (0);
 }
 
 int
