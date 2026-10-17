@@ -43,11 +43,11 @@
 
 #include <machine/nexusvar.h>
 
-uint32_t acpi_resume_beep;
-SYSCTL_UINT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RWTUN, &acpi_resume_beep,
+int acpi_resume_beep;
+SYSCTL_INT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RWTUN, &acpi_resume_beep,
     0, "Beep the PC speaker when resuming");
 
-uint32_t acpi_reset_video;
+int acpi_reset_video;
 TUNABLE_INT("hw.acpi.reset_video", &acpi_reset_video);
 
 static int intr_model = ACPI_INTR_PIC;
@@ -68,7 +68,7 @@ acpi_machdep_init(device_t dev)
 	else
 		acpi_SetIntrModel(intr_model);
 
-	SYSCTL_ADD_UINT(&sc->acpi_sysctl_ctx,
+	SYSCTL_ADD_INT(&sc->acpi_sysctl_ctx,
 	    SYSCTL_CHILDREN(sc->acpi_sysctl_tree), OID_AUTO,
 	    "reset_video", CTLFLAG_RW, &acpi_reset_video, 0,
 	    "Call the VESA reset BIOS vector on the resume path");
