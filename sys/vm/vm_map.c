@@ -5333,68 +5333,107 @@ vm_map_range_valid_KBI(vm_map_t map, vm_offset_t start, vm_offset_t end)
 }
 
 #ifdef INVARIANTS
+/* Out of line, so callers that skip the walk do not reserve its stack. */
+static void __noinline
+vm_map_assert_tree(vm_map_t map)
+{
+	struct {
+		vm_map_entry_t entry;
+		vm_map_entry_t bound;
+	} pending[sizeof(vm_offset_t) * NBBY];
+	vm_map_entry_t cur, entry, header, lbound, ubound;
+	vm_size_t max_left, max_right;
+	u_int sp;
+
+	header = &map->header;
+	KASSERT(header->end <= header->start,
+	    ("map %p min = %jx, max = %jx", map,
+	    (uintmax_t)header->end, (uintmax_t)header->start));
+	KASSERT(map->root != NULL ||
+	    (header->left == header && header->right == header),
+	    ("map %p is empty but header links %p %p", map,
+	    header->left, header->right));
+	cur = map->root;
+	lbound = ubound = header;
+	sp = 0;
+	while (cur != NULL) {
+		KASSERT(cur != header, ("map %p header is in the tree", map));
+		KASSERT(cur->start < cur->end,
+		    ("map %p start = %jx, end = %jx", map,
+		    (uintmax_t)cur->start, (uintmax_t)cur->end));
+		KASSERT(lbound->end <= cur->start,
+		    ("map %p lbound->end = %jx, start = %jx", map,
+		    (uintmax_t)lbound->end, (uintmax_t)cur->start));
+		KASSERT(cur->end <= ubound->start,
+		    ("map %p end = %jx, ubound->start = %jx", map,
+		    (uintmax_t)cur->end, (uintmax_t)ubound->start));
+		KASSERT(cur->left == header || cur->left->start < cur->start,
+		    ("map %p left->start = %jx, start = %jx", map,
+		    (uintmax_t)cur->left->start, (uintmax_t)cur->start));
+		KASSERT(cur->right == header || cur->start < cur->right->start,
+		    ("map %p start = %jx, right->start = %jx", map,
+		    (uintmax_t)cur->start, (uintmax_t)cur->right->start));
+		KASSERT(cur->left != header || header->right == cur,
+		    ("map %p header->right = %p, first = %p", map,
+		    header->right, cur));
+		KASSERT(cur->right != header || header->left == cur,
+		    ("map %p header->left = %p, last = %p", map,
+		    header->left, cur));
+		max_left = vm_map_entry_max_free_left(cur, lbound);
+		max_right = vm_map_entry_max_free_right(cur, ubound);
+		KASSERT(cur->max_free == vm_size_max(max_left, max_right),
+		    ("map %p max = %jx, max_left = %jx, max_right = %jx", map,
+		    (uintmax_t)cur->max_free,
+		    (uintmax_t)max_left, (uintmax_t)max_right));
+
+		/* A link equal to its bound is a thread, not a child. */
+		if (cur->left != lbound && cur->right != ubound) {
+			KASSERT(sp < nitems(pending),
+			    ("map %p pending stack overflow", map));
+			pending[sp].entry = cur;
+			/* Each push at least halves the remaining span. */
+			if (cur->start - lbound->end <
+			    ubound->start - cur->end) {
+				pending[sp++].bound = ubound;
+				ubound = cur;
+				cur = cur->left;
+			} else {
+				pending[sp++].bound = lbound;
+				lbound = cur;
+				cur = cur->right;
+			}
+		} else if (cur->left != lbound) {
+			ubound = cur;
+			cur = cur->left;
+		} else if (cur->right != ubound) {
+			lbound = cur;
+			cur = cur->right;
+		} else if (sp > 0) {
+			entry = pending[--sp].entry;
+			if (cur->start < entry->start) {
+				lbound = entry;
+				ubound = pending[sp].bound;
+				cur = entry->right;
+			} else {
+				lbound = pending[sp].bound;
+				ubound = entry;
+				cur = entry->left;
+			}
+		} else {
+			cur = NULL;
+		}
+	}
+}
+
 static void
 _vm_map_assert_consistent(vm_map_t map, int check)
 {
-	vm_map_entry_t entry, prev;
-	vm_map_entry_t cur, header, lbound, ubound;
-	vm_size_t max_left, max_right;
 
 #ifdef DIAGNOSTIC
 	++map->nupdates;
 #endif
-	if (enable_vmmap_check != check)
-		return;
-
-	header = prev = &map->header;
-	VM_MAP_ENTRY_FOREACH(entry, map) {
-		KASSERT(prev->end <= entry->start,
-		    ("map %p prev->end = %jx, start = %jx", map,
-		    (uintmax_t)prev->end, (uintmax_t)entry->start));
-		KASSERT(entry->start < entry->end,
-		    ("map %p start = %jx, end = %jx", map,
-		    (uintmax_t)entry->start, (uintmax_t)entry->end));
-		KASSERT(entry->left == header ||
-		    entry->left->start < entry->start,
-		    ("map %p left->start = %jx, start = %jx", map,
-		    (uintmax_t)entry->left->start, (uintmax_t)entry->start));
-		KASSERT(entry->right == header ||
-		    entry->start < entry->right->start,
-		    ("map %p start = %jx, right->start = %jx", map,
-		    (uintmax_t)entry->start, (uintmax_t)entry->right->start));
-		cur = map->root;
-		lbound = ubound = header;
-		for (;;) {
-			if (entry->start < cur->start) {
-				ubound = cur;
-				cur = cur->left;
-				KASSERT(cur != lbound,
-				    ("map %p cannot find %jx",
-				    map, (uintmax_t)entry->start));
-			} else if (cur->end <= entry->start) {
-				lbound = cur;
-				cur = cur->right;
-				KASSERT(cur != ubound,
-				    ("map %p cannot find %jx",
-				    map, (uintmax_t)entry->start));
-			} else {
-				KASSERT(cur == entry,
-				    ("map %p cannot find %jx",
-				    map, (uintmax_t)entry->start));
-				break;
-			}
-		}
-		max_left = vm_map_entry_max_free_left(entry, lbound);
-		max_right = vm_map_entry_max_free_right(entry, ubound);
-		KASSERT(entry->max_free == vm_size_max(max_left, max_right),
-		    ("map %p max = %jx, max_left = %jx, max_right = %jx", map,
-		    (uintmax_t)entry->max_free,
-		    (uintmax_t)max_left, (uintmax_t)max_right));
-		prev = entry;
-	}
-	KASSERT(prev->end <= entry->start,
-	    ("map %p prev->end = %jx, start = %jx", map,
-	    (uintmax_t)prev->end, (uintmax_t)entry->start));
+	if (enable_vmmap_check == check)
+		vm_map_assert_tree(map);
 }
 #endif
 
