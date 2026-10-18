@@ -307,7 +307,7 @@ abd_kstats_update(kstat_t *ksp, int rw)
 void
 abd_init(void)
 {
-	abd_chunk_cache = kmem_cache_create("abd_chunk", PAGE_SIZE, 0,
+	abd_chunk_cache = kmem_cache_create("abd_chunk", PAGE_SIZE, 64,
 	    NULL, NULL, NULL, NULL, 0, KMC_NODEBUG | KMC_RECLAIMABLE);
 
 	wmsum_init(&abd_sums.abdstat_struct_size, 0);
