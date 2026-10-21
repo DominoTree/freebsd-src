@@ -121,8 +121,8 @@ xattr_to_extattr(const char *uattrname, int *attrnamespace, char *attrname)
 	for (*attrnamespace = EXTATTR_NAMESPACE_USER;
 	    *attrnamespace < nitems(extattr_namespace_names);
 	    (*attrnamespace)++) {
-		if (bcmp(uname, extattr_namespace_names[*attrnamespace],
-		    dot - uname + 1) == 0) {
+		if (strcmp(uname,
+		    extattr_namespace_names[*attrnamespace]) == 0) {
 			dot++;
 			len = strlen(dot) + 1;
 			bcopy(dot, attrname, len);
