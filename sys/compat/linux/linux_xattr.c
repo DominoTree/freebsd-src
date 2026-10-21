@@ -103,10 +103,11 @@ error_to_xattrerror(int attrnamespace, int error)
 }
 
 static int
-xattr_to_extattr(const char *uattrname, int *attrnamespace, char *attrname)
+xattr_to_extattr(const char *uattrname, int *attrnamespace, char *attrname,
+    size_t attrnamelen)
 {
 	char uname[LINUX_XATTR_NAME_MAX + 1], *dot;
-	size_t len, cplen;
+	size_t cplen;
 	int error;
 
 	error = copyinstr(uattrname, uname, sizeof(uname), &cplen);
@@ -121,11 +122,11 @@ xattr_to_extattr(const char *uattrname, int *attrnamespace, char *attrname)
 	for (*attrnamespace = EXTATTR_NAMESPACE_USER;
 	    *attrnamespace < nitems(extattr_namespace_names);
 	    (*attrnamespace)++) {
-		if (bcmp(uname, extattr_namespace_names[*attrnamespace],
-		    dot - uname + 1) == 0) {
-			dot++;
-			len = strlen(dot) + 1;
-			bcopy(dot, attrname, len);
+		if (strcmp(uname,
+		    extattr_namespace_names[*attrnamespace]) == 0) {
+			if (strlcpy(attrname, dot + 1, attrnamelen) >=
+			    attrnamelen)
+				return (ERANGE);
 			return (0);
 		}
 	}
@@ -205,7 +206,8 @@ listxattr(struct thread *td, struct listxattr_args *args)
 			}
 			++key;
 			if (args->list != NULL && args->size > 0) {
-				sprintf(attrname, "%s.%.*s", prefix, keylen, key);
+				snprintf(attrname, sizeof(attrname), "%s.%.*s",
+				    prefix, keylen, key);
 				error = copyout(attrname, args->list, pairlen);
 				if (error != 0)
 					break;
@@ -280,7 +282,8 @@ removexattr(struct thread *td, struct removexattr_args *args)
 			return (error);
 	}
 
-	error = xattr_to_extattr(args->name, &attrnamespace, attrname);
+	error = xattr_to_extattr(args->name, &attrnamespace, attrname,
+	    sizeof(attrname));
 	if (error != 0)
 		goto out_err;
 	if (args->path != NULL)
@@ -434,7 +437,8 @@ getxattr(struct thread *td, struct getxattr_args *args)
 		vp = nd.ni_vp;
 	}
 
-	error = xattr_to_extattr(args->name, &attrnamespace, attrname);
+	error = xattr_to_extattr(args->name, &attrnamespace, attrname,
+	    sizeof(attrname));
 	if (error == 0) {
 		error = linux_extattr_get_vp(vp, attrnamespace, attrname,
 			args->value, args->size, td);
@@ -516,7 +520,8 @@ setxattr(struct thread *td, struct setxattr_args *args)
 		error = EINVAL;
 		goto out_err;
 	}
-	error = xattr_to_extattr(args->name, &attrnamespace, attrname);
+	error = xattr_to_extattr(args->name, &attrnamespace, attrname,
+	    sizeof(attrname));
 	if (error != 0)
 		goto out_err;
 
