@@ -1596,7 +1596,7 @@ linux_sendmmsg(struct thread *td, struct linux_sendmmsg_args *args)
 {
 	struct l_mmsghdr *msg;
 	l_uint retval;
-	int error, datagrams;
+	int error = 0, datagrams;
 
 	if (args->vlen > UIO_MAXIOV)
 		args->vlen = UIO_MAXIOV;
