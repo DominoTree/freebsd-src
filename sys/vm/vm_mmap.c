@@ -838,7 +838,7 @@ kern_mincore(struct thread *td, uintptr_t addr0, size_t len, char *vec)
 	vm_paddr_t pa;
 	vm_page_t m;
 	vm_pindex_t pindex;
-	int error, lastvecindex, mincoreinfo, vecindex;
+	int error = 0, lastvecindex, mincoreinfo, vecindex;
 	unsigned int timestamp;
 
 	/*
