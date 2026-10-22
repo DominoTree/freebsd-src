@@ -2076,7 +2076,7 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 	struct proc *p;
 	u_int which;
 	int flags;
-	int error;
+	int error = 0;
 	bool exec_blocked;
 
 	if (args->new == NULL && args->old != NULL) {
