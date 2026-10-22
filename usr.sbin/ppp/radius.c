@@ -207,7 +207,7 @@ demangle(struct radius *r, const void *mangled, size_t mlen,
    * maybe some padding.
    */
   *len = *P;
-  if (*len > mlen - 1) {
+  if (*len >= mlen - SALT_LEN) {
     log_Printf(LogWARN, "Mangled data seems to be garbage\n");
     *buf = NULL;
     *len = 0;
