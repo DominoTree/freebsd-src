@@ -98,7 +98,8 @@ SyncTable(struct pred1_state *state, u_char *source, u_char *dest, int len)
 }
 
 static int
-decompress(struct pred1_state *state, u_char *source, u_char *dest, int len)
+decompress(struct pred1_state *state, u_char *source, u_char *dest, int len,
+	   int destlen)
 {
   int i, bitmask;
   unsigned char flags, *orgdest;
@@ -108,6 +109,8 @@ decompress(struct pred1_state *state, u_char *source, u_char *dest, int len)
     flags = *source++;
     len--;
     for (i = 0, bitmask = 1; i < 8; i++, bitmask <<= 1) {
+      if (dest - orgdest >= destlen)
+	return -1;				/* Output overrun */
       if (flags & bitmask) {
 	*dest = state->dict[state->hash];	/* Guess correct */
       } else {
@@ -226,6 +229,13 @@ Pred1Input(void *v, struct ccp *ccp, u_short *proto, struct mbuf *bp)
   wp = m_get(MAX_MRU + 2, MB_CCPIN);
   cp = MBUF_CTOP(bp);
   olen = m_length(bp);
+  if (olen < 4 || (size_t)olen > wp->m_size) {
+    log_Printf(LogCCP, "Pred1: Bad input length %d\n", olen);
+    fsm_Reopen(&ccp->fsm);
+    m_freem(bp);
+    m_freem(wp);
+    return NULL;
+  }
   pp = bufp = MBUF_CTOP(wp);
   *pp++ = *cp & 0177;
   len = *cp++ << 8;
@@ -233,7 +243,7 @@ Pred1Input(void *v, struct ccp *ccp, u_short *proto, struct mbuf *bp)
   len += *cp++;
   ccp->uncompin += len & 0x7fff;
   if (len & 0x8000) {
-    len1 = decompress(state, cp, pp, olen - 4);
+    len1 = decompress(state, cp, pp, olen - 4, (int)wp->m_size - 4);
     ccp->compin += olen;
     len &= 0x7fff;
     if (len != len1) {		/* Error is detected. Send reset request */
