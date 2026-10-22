@@ -576,7 +576,7 @@ CcpDecodeConfig(struct fsm *fp, u_char *cp, u_char *end, int mode_type,
     ccp->in.algorithm = -1;	/* In case we've received two REQs in a row */
 
   while (end >= cp + sizeof(opt->hdr)) {
-    if ((opt = fsm_readopt(&cp)) == NULL)
+    if ((opt = fsm_readopt(&cp, end)) == NULL)
       break;
 
     for (f = NALGORITHMS-1; f > -1; f--)

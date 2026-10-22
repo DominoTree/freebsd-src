@@ -675,7 +675,7 @@ LcpDecodeConfig(struct fsm *fp, u_char *cp, u_char *end, int mode_type,
   op = callback_req = 0;
 
   while (end - cp >= (int)sizeof(opt->hdr)) {
-    if ((opt = fsm_readopt(&cp)) == NULL)
+    if ((opt = fsm_readopt(&cp, end)) == NULL)
       break;
 
     snprintf(request, sizeof request, " %s[%d]", protoname(opt->hdr.id),

@@ -1142,12 +1142,17 @@ fsm2initial(struct fsm *fp)
 }
 
 struct fsm_opt *
-fsm_readopt(u_char **cp)
+fsm_readopt(u_char **cp, u_char *end)
 {
   struct fsm_opt *o = (struct fsm_opt *)*cp;
 
   if (o->hdr.len < sizeof(struct fsm_opt_hdr)) {
     log_Printf(LogERROR, "Bad option length %d (out of phase?)\n", o->hdr.len);
+    return NULL;
+  }
+
+  if (o->hdr.len > end - *cp) {
+    log_Printf(LogERROR, "Bad option length %d (exceeds packet)\n", o->hdr.len);
     return NULL;
   }
 

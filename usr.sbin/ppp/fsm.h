@@ -194,7 +194,7 @@ extern void fsm_NullRecvResetAck(struct fsm *, u_char);
 extern void fsm_Reopen(struct fsm *);
 extern void fsm2initial(struct fsm *);
 extern const char *State2Nam(u_int);
-extern struct fsm_opt *fsm_readopt(u_char **);
+extern struct fsm_opt *fsm_readopt(u_char **, u_char *);
 extern void fsm_rej(struct fsm_decode *, const struct fsm_opt *);
 extern void fsm_ack(struct fsm_decode *, const struct fsm_opt *);
 extern void fsm_nak(struct fsm_decode *, const struct fsm_opt *);

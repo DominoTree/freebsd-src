@@ -692,7 +692,7 @@ ipv6cp_DecodeConfig(struct fsm *fp, u_char *cp, u_char *end, int mode_type,
   memset(zero, 0, IPV6CP_IFIDLEN);
 
   while (end - cp >= (int)sizeof(opt->hdr)) {
-    if ((opt = fsm_readopt(&cp)) == NULL)
+    if ((opt = fsm_readopt(&cp, end)) == NULL)
       break;
 
     snprintf(tbuff, sizeof tbuff, " %s[%d]", protoname(opt->hdr.id),
