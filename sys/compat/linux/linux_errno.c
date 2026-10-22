@@ -14,6 +14,8 @@ bsd_to_linux_errno(int error)
 	KASSERT(error >= 0 && error <= ELAST,
 	    ("%s: bad error %d", __func__, error));
 
+	if (__predict_false(error < 0 || error > ELAST))
+		return (-LINUX_EINVAL);
 	return (linux_errtbl[error]);
 }
 
