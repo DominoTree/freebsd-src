@@ -730,6 +730,8 @@ ldm_vnum_get(const u_char *buf, int offset, uint64_t *result, size_t range)
 	uint64_t num;
 	uint8_t len;
 
+	if (offset >= range)
+		return (-1);
 	len = buf[offset++];
 	if (len > sizeof(uint64_t) || len + offset >= range)
 		return (-1);
@@ -746,6 +748,8 @@ ldm_vstr_get(const u_char *buf, int offset, u_char *result,
 {
 	uint8_t len;
 
+	if (offset >= range)
+		return (-1);
 	len = buf[offset++];
 	if (len >= maxlen || len + offset >= range)
 		return (-1);
@@ -760,6 +764,8 @@ ldm_vparm_skip(const u_char *buf, int offset, size_t range)
 {
 	uint8_t len;
 
+	if (offset >= range)
+		return (-1);
 	len = buf[offset++];
 	if (offset + len >= range)
 		return (-1);
