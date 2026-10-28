@@ -297,7 +297,7 @@ g_llvm_start(struct bio *bp)
 			chunk_index = offset / chunk_size; /* round downwards */
 			in_chunk_offset = offset % chunk_size;
 			in_chunk_length =
-			    min(length, chunk_size - in_chunk_offset);
+			    MIN(length, chunk_size - in_chunk_offset);
 
 			/* XXX could be faster */
 			LIST_FOREACH(sg, &lv->lv_segs, sg_next) {
