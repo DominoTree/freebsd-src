@@ -10932,8 +10932,10 @@ bbr_state_startup(struct tcp_bbr *bbr, uint32_t cts, int32_t epoch, int32_t pkt_
 		    (bbr->r_ctl.rc_pkt_epoch_rtt > bbr->r_ctl.startup_last_srtt)) {
 			delta = bbr->r_ctl.rc_pkt_epoch_rtt - bbr->r_ctl.startup_last_srtt;
 			rtt_gain = (delta * 100) / bbr->r_ctl.startup_last_srtt;
-		} else
+		} else {
+			delta = 0;
 			rtt_gain = 0;
+		}
 		if ((bbr->r_ctl.startup_last_srtt == 0)  ||
 		    (bbr->r_ctl.rc_pkt_epoch_rtt < bbr->r_ctl.startup_last_srtt))
 			/* First time or new lower value */
