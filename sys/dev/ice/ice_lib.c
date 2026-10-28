@@ -10316,6 +10316,13 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	cmd = (struct ice_nvm_access_cmd *)nvm_buffer;
 	data = (union ice_nvm_access_data *)(nvm_buffer + sizeof(struct ice_nvm_access_cmd));
 
+	if (cmd->data_size > malloc_len - sizeof(*cmd)) {
+		device_printf(dev, "%s: data size %u exceeds the buffer\n",
+			      __func__, cmd->data_size);
+		err = EINVAL;
+		goto cleanup_free_nvm_buffer;
+	}
+
 	/* Handle the NVM access request */
 	status = ice_handle_nvm_access(hw, cmd, data);
 	if (status)
