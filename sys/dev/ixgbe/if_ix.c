@@ -1701,7 +1701,7 @@ ixgbe_nvm_access_ioctl(struct ixgbe_softc *sc, struct ifdrv *ifd)
 		return (EINVAL);
 	}
 
-	malloc_len = max(ifd_len, sizeof(*data) + sizeof(*cmd));
+	malloc_len = MAX(ifd_len, sizeof(*data) + sizeof(*cmd));
 
 	nvm_buffer = (u8 *)malloc(malloc_len, M_IXGBE, M_ZERO | M_NOWAIT);
 	if (!nvm_buffer)
