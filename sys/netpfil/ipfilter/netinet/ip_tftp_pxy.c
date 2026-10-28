@@ -406,7 +406,7 @@ ipf_p_tftp_client(ipf_tftp_softc_t *softt, fr_info_t *fin, ap_session_t *aps,
 	udphdr_t *udp;
 	int len;
 
-	if (fin->fin_dlen < 4)
+	if (fin->fin_dlen < (int)sizeof(udphdr_t) + 2)
 		return (0);
 
 	ti = aps->aps_data;
@@ -452,7 +452,7 @@ ipf_p_tftp_server(ipf_tftp_softc_t *softt, fr_info_t *fin, ap_session_t *aps,
 	u_short arg;
 	u_char *msg;
 
-	if (fin->fin_dlen < 4)
+	if (fin->fin_dlen < (int)sizeof(udphdr_t) + 4)
 		return (0);
 
 	ti = aps->aps_data;
