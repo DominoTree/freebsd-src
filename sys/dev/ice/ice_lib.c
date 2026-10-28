@@ -10294,7 +10294,7 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	 * ensures that any access to the data union will not access invalid
 	 * memory.
 	 */
-	malloc_len = max(ifd_len, sizeof(*data) + sizeof(*cmd));
+	malloc_len = MAX(ifd_len, sizeof(*data) + sizeof(*cmd));
 
 	nvm_buffer = (u8 *)malloc(malloc_len, M_ICE, M_ZERO | M_WAITOK);
 	if (!nvm_buffer)
