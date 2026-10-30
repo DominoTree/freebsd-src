@@ -2679,8 +2679,8 @@ vn_rlimit_fsizex1(const struct vnode *vp, struct uio *uio, off_t maxfsz,
 	/*
 	 * Handle file system maximum file size.
 	 */
-	if (maxfsz != 0 && uio->uio_offset + uio->uio_resid > maxfsz) {
-		if (!adj || uio->uio_offset >= maxfsz)
+	if (maxfsz != 0 && (uoff_t)uio->uio_offset + uio->uio_resid > maxfsz) {
+		if (!adj || (uoff_t)uio->uio_offset >= maxfsz)
 			return (EFBIG);
 		uio->uio_resid = maxfsz - uio->uio_offset;
 	}
