@@ -507,13 +507,9 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr_in6 *sin6, struct ucred *cred,
 			return (EADDRINUSE);
 		}
 		if ((inp->inp_flags & INP_UNCONNECTED) == 0) {
-			struct inpcb *i __diagused;
 			struct inpcblbgroup *g __diagused;
 
-			i = in6_pcblookup_wild_locked(ipictx.pcbinfo,
-			    &laddr6.sin6_addr, inp->inp_lport, RT_ALL_FIBS,
-			    &ipictx.wbucket);
-			MPASS(i);
+			inpcbinfo_ctx_wildlock(&ipictx, inp->inp_lport);
 			if (inp->inp_flags & INP_INLBGROUP) {
 				g = in_pcblbgroup_find(inp, &ipictx.lbbucket);
 				MPASS(g);
