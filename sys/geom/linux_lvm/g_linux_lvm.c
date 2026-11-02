@@ -297,7 +297,7 @@ g_llvm_start(struct bio *bp)
 			chunk_index = offset / chunk_size; /* round downwards */
 			in_chunk_offset = offset % chunk_size;
 			in_chunk_length =
-			    min(length, chunk_size - in_chunk_offset);
+			    MIN(length, chunk_size - in_chunk_offset);
 
 			/* XXX could be faster */
 			LIST_FOREACH(sg, &lv->lv_segs, sg_next) {
@@ -308,6 +308,12 @@ g_llvm_start(struct bio *bp)
 					pv = sg->sg_pv;
 					break;
 				}
+			}
+			if (pv == NULL) {
+				g_destroy_bio(cb);
+				bioq_dismantle(&bq);
+				g_io_deliver(bp, EIO);
+				return;
 			}
 			cb->bio_offset =
 			    (off_t)chunk_index * (off_t)chunk_size
