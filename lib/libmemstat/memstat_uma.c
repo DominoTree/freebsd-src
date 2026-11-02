@@ -320,7 +320,7 @@ memstat_kvm_uma(struct memory_type_list *list, void *kvm_handle)
 	int hint_dontsearch, i, mp_maxid, ndomains, ret;
 	char name[MEMTYPE_MAXNAME];
 	cpuset_t all_cpus;
-	long cpusetsize;
+	long cpusetsize, nbuckets;
 	kvm_t *kvm;
 
 	kvm = (kvm_t *)kvm_handle;
@@ -459,15 +459,18 @@ skip_percpu:
 				    sizeof(uzd), 0);
 				if (ret != 0)
 					continue;
+				/* Cached buckets are never empty. */
+				nbuckets = 0;
 				for (ubp =
 				    STAILQ_FIRST(&uzd.uzd_buckets);
-				    ubp != NULL;
+				    ubp != NULL && nbuckets < uzd.uzd_nitems;
 				    ubp = STAILQ_NEXT(&ub, ub_link)) {
 					ret = kread(kvm, ubp, &ub,
 					   sizeof(ub), 0);
 					if (ret != 0)
-						continue;
+						break;
 					mtp->mt_zonefree += ub.ub_cnt;
+					nbuckets++;
 				}
 			}
 			if (!((kz.uk_flags & UMA_ZONE_SECONDARY) &&
