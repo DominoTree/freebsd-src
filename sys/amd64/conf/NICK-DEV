@@ -10,20 +10,9 @@ options 	IEEE80211_DEBUG		# enable debug msgs
 options 	USB_DEBUG		# enable debug msgs
 options 	HID_DEBUG		# enable debug msgs
 
-options 	KASAN
 options 	KUBSAN
-# Print KASAN reports instead of panicking.
-envvar		debug.kasan.panic_on_violation=0
 # Hold boot-time reports until syslogd drains them.
 options 	MSGBUF_SIZE=1048576
-
-options 	EPOCH_TRACE
-nooptions	WITNESS
-nooptions	WITNESS_KDB
-options 	DRIVER_FAILPOINTS
-
-# Sanity checks INVARIANTS alone does not cover.
-options 	DIAGNOSTIC
 
 # Dump and reboot on panic for unattended operation.
 options 	KDB_UNATTENDED
