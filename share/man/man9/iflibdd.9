@@ -1,4 +1,4 @@
-.Dd September 11, 2026
+.Dd September 19, 2026
 .Dt IFLIBDD 9
 .Os
 .Sh NAME
@@ -194,6 +194,31 @@
 .Fa "if_ctx_t ctx"
 .Fa "struct ifi2creq *req"
 .Fc
+.Ft int
+.Fo ifdi_get_rss_key
+.Fa "if_ctx_t ctx"
+.Fa "struct ifrsskey *key"
+.Fc
+.Ft int
+.Fo ifdi_set_rss_key
+.Fa "if_ctx_t ctx"
+.Fa "struct ifrsskey *key"
+.Fc
+.Ft int
+.Fo ifdi_get_rss_hash
+.Fa "if_ctx_t ctx"
+.Fa "struct ifrsshash *hash"
+.Fc
+.Ft int
+.Fo ifdi_get_rss_table
+.Fa "if_ctx_t ctx"
+.Fa "struct ifrsstable *table"
+.Fc
+.Ft int
+.Fo ifdi_set_rss_table
+.Fa "if_ctx_t ctx"
+.Fa "struct ifrsstable *table"
+.Fc
 .Sh FUNCTIONS
 The above named functions are device dependent configuration functions.
 These routines are registered with iflib by the driver and are called from the
@@ -364,7 +389,68 @@ Optional function to run when a transmit queue is hung.
 .It Fn ifdi_led_func
 .It Fn ifdi_sysctl_int_delay
 .It Fn ifdi_i2c_req
+.It Fn ifdi_get_rss_key
+Optional function that reports the hash function, key length and key the
+device is programmed with, for
+.Dv SIOCGIFRSSKEY .
+.It Fn ifdi_set_rss_key
+Optional function that programs a hash key, for
+.Dv SIOCSIFRSSKEY .
+iflib has checked that the requested function is
+.Dv RSS_FUNC_TOEPLITZ
+and that the length fits the buffer, and has cleared the bytes past the
+key; reject a length the device cannot use with
+.Er EINVAL .
+The key must survive
+.Fn ifdi_init .
+.It Fn ifdi_get_rss_hash
+Optional function that reports the hash function and the
+.Dv RSS_TYPE_
+selections the device is programmed with, for
+.Dv SIOCGIFRSSHASH .
+.It Fn ifdi_get_rss_table
+Optional function that stores the receive queue of each indirection table
+entry in
+.Va ifrt_table
+and sets
+.Va ifrt_nentries
+to
+.Va isc_rss_table_size ,
+for
+.Dv SIOCGIFRSSTABLE .
+iflib fills in
+.Va ifrt_nqueues .
+.It Fn ifdi_set_rss_table
+Optional function that programs the indirection table, for
+.Dv SIOCSIFRSSTABLE .
+iflib has checked that
+.Va ifrt_nentries
+equals
+.Va isc_rss_table_size
+and that every entry names an existing receive queue.
+The table must survive
+.Fn ifdi_init .
 .El
+.Pp
+The five RSS functions run with the context lock held.
+A driver that does not provide one returns
+.Er EOPNOTSUPP ;
+one whose state is not available yet should return
+.Er ENXIO .
+iflib itself returns
+.Er ENXIO
+for all five until
+.Fn ifdi_attach_post
+has completed, so a driver need not track that.
+iflib clears a query's buffer past the interface name before the driver
+fills it, and checks a request before calling a setter, so a malformed
+request is refused with
+.Er EINVAL
+whether or not the driver provides the setter; probe for support with a
+query.
+A driver implementing the table functions must set
+.Va isc_rss_table_size ,
+which iflib takes as the table length.
 .Sh SEE ALSO
 .Xr ifconfig 8 ,
 .Xr iflibdi 9 ,
