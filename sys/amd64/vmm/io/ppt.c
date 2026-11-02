@@ -90,7 +90,7 @@ struct pptseg {
 struct pptdev {
 	device_t	dev;
 	struct vm	*vm;			/* owner of this device */
-	bool		resetting;		/* guest FLR in progress */
+	bool		resetting;		/* reset in progress */
 	TAILQ_ENTRY(pptdev)	next;
 	struct pptseg mmio[MAX_MMIOSEGS];
 	struct {
@@ -167,6 +167,7 @@ ppt_attach(device_t dev)
 
 	PPT_LOCK();
 	cmd1 = cmd = pci_read_config(dev, PCIR_COMMAND, 2);
+	cmd |= PCIM_CMD_INTxDIS;
 	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(dev, PCIR_COMMAND, cmd, 2);
 	error = iommu_remove_device(iommu_host_domain(), dev, pci_get_rid(dev));
@@ -251,11 +252,12 @@ ppt_find(struct vm *vm, int bus, int slot, int func, struct pptdev **pptp)
 		if (!ppt->resetting)
 			break;
 		/*
-		 * Once resetting is set, every exit from ppt_reset_device()
-		 * reacquires ppt_mtx, clears resetting, and wakes us.  The FLR wait
-		 * itself is bounded.
+		 * Once resetting is set, every exit from ppt_reset_device(),
+		 * ppt_assign_device(), and ppt_unassign_device() reacquires
+		 * ppt_mtx, clears resetting, and wakes us. The wait itself
+		 * is bounded.
 		 */
-		sx_sleep(ppt, &ppt_mtx, 0, "pptflr", 0);
+		sx_sleep(ppt, &ppt_mtx, 0, "pptrst", 0);
 	}
 
 	*pptp = ppt;
@@ -439,20 +441,31 @@ ppt_assign_device(struct vm *vm, int bus, int slot, int func)
 	/* Passing NULL requires the device to be unowned. */
 	error = ppt_find(NULL, bus, slot, func, &ppt);
 	if (error != 0)
-		goto out;
+		goto out_locked;
 
+	ppt->resetting = true;
+	ppt->vm = vm;
+
+	/* Release the lock to allow for longer reset cycles */
+	PPT_UNLOCK();
 	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
 	pci_restore_state(ppt->dev);
+	PPT_LOCK();
+
 	error = iommu_add_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
 	if (error != 0)
-		goto out;
-	ppt->vm = vm;
+		goto out_reset;
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	cmd |= PCIM_CMD_BUSMASTEREN | ppt_bar_enables(ppt);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
-out:
+out_reset:
+	if (error != 0)
+		ppt->vm = NULL;
+	ppt->resetting = false;
+	wakeup(ppt);
+out_locked:
 	PPT_UNLOCK();
 	return (error);
 }
@@ -469,18 +482,30 @@ ppt_unassign_device(struct vm *vm, int bus, int slot, int func)
 	if (error != 0)
 		goto out;
 
+	/* Mask INTx before MSI teardown (PCI_QUIRK_MSI_INTX_BUG leaves it clear). */
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
+	cmd |= PCIM_CMD_INTxDIS;
+	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
+	ppt->resetting = true;
+
+	/* Release the lock to allow for longer reset/teardown cycles */
+	PPT_UNLOCK();
+	ppt_unmap_all_mmio(vm, ppt);
+	ppt_teardown_msi(ppt);
+	ppt_teardown_msix(ppt);
+	/* Gate decode and DMA after MSI-X teardown, which writes the table BAR. */
 	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	pci_save_state(ppt->dev);
 	ppt_pci_reset(ppt->dev);
 	pci_restore_state(ppt->dev);
-	ppt_unmap_all_mmio(vm, ppt);
-	ppt_teardown_msi(ppt);
-	ppt_teardown_msix(ppt);
+	PPT_LOCK();
+
 	error = iommu_remove_device(vm_iommu_domain(vm), ppt->dev,
 	    pci_get_rid(ppt->dev));
 	ppt->vm = NULL;
+	ppt->resetting = false;
+	wakeup(ppt);
 out:
 	PPT_UNLOCK();
 	return (error);
@@ -518,13 +543,15 @@ ppt_reset_device(struct vm *vm, int bus, int slot, int func)
 	/*
 	 * Disable physical INTx before releasing its handler.  This also makes
 	 * an asserted Function send Deassert_INTx before FLR, as required by
-	 * PCIe.  Gate decoding and DMA before tearing down MSI or MSI-X.
+	 * PCIe.
 	 */
 	cmd = original_cmd | PCIM_CMD_INTxDIS;
-	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	ppt_teardown_msi(ppt);
 	ppt_teardown_msix(ppt);
+	/* Gate decode and DMA after MSI-X teardown, which writes the table BAR. */
+	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
+	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 
 	/*
 	 * Save the host-owned state after interrupt teardown, then restore BARs
@@ -569,9 +596,8 @@ restore:
 		error = EIO;
 		goto out;
 	}
-	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN |
-	    PCIM_CMD_INTxDIS);
-	cmd |= enables | (original_cmd & PCIM_CMD_INTxDIS);
+	cmd &= ~(PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
+	cmd |= enables | PCIM_CMD_INTxDIS;
 	pci_write_config(ppt->dev, PCIR_COMMAND, cmd, 2);
 	cmd = pci_read_config(ppt->dev, PCIR_COMMAND, 2);
 	if (cmd == 0xffff || (cmd & enables) != enables) {
