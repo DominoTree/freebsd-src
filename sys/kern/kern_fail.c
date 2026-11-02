@@ -63,6 +63,7 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
+#include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/sbuf.h>
 #include <sys/sleepqueue.h>
@@ -883,14 +884,14 @@ fail_point_sysctl(SYSCTL_HANDLER_ARGS)
 	if (req->newptr) {
 		if (req->newlen > MAX_FAIL_POINT_BUF) {
 			error = EINVAL;
-			goto out;
+			goto out_unlock;
 		}
 
 		buf = fp_malloc(req->newlen + 1, M_WAITOK);
 
 		error = SYSCTL_IN(req, buf, req->newlen);
 		if (error)
-			goto out;
+			goto out_unlock;
 		buf[req->newlen] = '\0';
 
 		error = fail_point_set(fp, buf);
@@ -901,6 +902,10 @@ fail_point_sysctl(SYSCTL_HANDLER_ARGS)
 
 	/* Retrieving. */
 	fail_point_get(fp, &sb, false);
+	goto out;
+
+out_unlock:
+	sx_xunlock(&sx_fp_set);
 
 out:
 	sbuf_finish(&sb);
@@ -917,6 +922,7 @@ fail_point_sysctl_status(SYSCTL_HANDLER_ARGS)
 {
 	struct fail_point *fp;
 	struct sbuf sb, *sb_check;
+	bool verbose;
 
 	fp = arg1;
 
@@ -926,8 +932,10 @@ fail_point_sysctl_status(SYSCTL_HANDLER_ARGS)
 
 	sbuf_set_drain(&sb, (sbuf_drain_func *)fail_sysctl_drain_func, req);
 
+	verbose = priv_check(req->td, PRIV_KMEM_READ) == 0;
+
 	/* Retrieving. */
-	fail_point_get(fp, &sb, true);
+	fail_point_get(fp, &sb, verbose);
 
 	sbuf_finish(&sb);
 	sbuf_delete(&sb);

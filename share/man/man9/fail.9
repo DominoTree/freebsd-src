@@ -24,7 +24,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 .\" DAMAGE.
 .\"
-.Dd June 6, 2019
+.Dd August 11, 2026
 .Dt FAIL 9
 .Os
 .Sh NAME
@@ -281,3 +281,26 @@ action as a
 action by specifying the
 .Sy FAIL_POINT_NONSLEEPABLE
 flag at the point the fail point is declared.
+.Sh SECURITY CONSIDERATIONS
+The fail point facility is compiled into every kernel, so the
+.Sy debug.fail_point
+tree is present even on kernels built without debugging options.
+.Pp
+Arming a fail point requires the
+.Dv PRIV_SYSCTL_WRITE
+privilege and is therefore not possible from within a jail.
+The current setting of a fail point is readable by any user, as is the
+companion
+.Sy debug.fail_point.status_ Ns Aq Ar name
+variable.
+The thread stacks reported by the latter are disclosed only to callers
+holding the
+.Dv PRIV_KMEM_READ
+privilege; unprivileged callers see the fail point setting alone.
+.Pp
+Fail points are not gated by
+.Xr securelevel 7 .
+An armed fail point can panic the system, inject errors into unrelated
+subsystems, or park threads in an uninterruptible sleep, so a fail point
+left armed is a denial of service against unprivileged consumers of the
+affected code path.
