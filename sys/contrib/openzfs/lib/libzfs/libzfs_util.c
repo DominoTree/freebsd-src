@@ -35,6 +35,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <math.h>
+#include <pthread.h>
 #if LIBFETCH_DYNAMIC
 #include <dlfcn.h>
 #endif
@@ -251,6 +252,9 @@ libzfs_error_description(libzfs_handle_t *hdl)
 		    "use 'zpool scrub -e' to resume error scrub"));
 	case EZFS_NO_SCRUB:
 		return (dgettext(TEXT_DOMAIN, "there is no active scrub"));
+	case EZFS_NO_ERRORLOG:
+		return (dgettext(TEXT_DOMAIN, "the last error log is empty, "
+		    "use 'zpool scrub' to refresh it"));
 	case EZFS_DIFF:
 		return (dgettext(TEXT_DOMAIN, "unable to generate diffs"));
 	case EZFS_DIFFDATA:
@@ -1048,6 +1052,9 @@ libzfs_envvar_is_set(const char *envvar)
 	    (!strncasecmp(env, "ON", 2) && strnlen(env, 3) == 2)));
 }
 
+static pthread_mutex_t libzfs_btree_lock = PTHREAD_MUTEX_INITIALIZER;
+static int libzfs_btree_refcount;
+
 libzfs_handle_t *
 libzfs_init(void)
 {
@@ -1070,12 +1077,14 @@ libzfs_init(void)
 	}
 
 	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR|O_EXCL|O_CLOEXEC)) < 0) {
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
 
 	if (libzfs_core_init() != 0) {
 		(void) close(hdl->libzfs_fd);
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
@@ -1086,17 +1095,19 @@ libzfs_init(void)
 	vdev_prop_init();
 	libzfs_mnttab_init(hdl);
 	fletcher_4_init();
-	zfs_btree_init();
+
+	(void) pthread_mutex_lock(&libzfs_btree_lock);
+	if (libzfs_btree_refcount++ == 0)
+		zfs_btree_init();
+	(void) pthread_mutex_unlock(&libzfs_btree_lock);
 
 	if (getenv("ZFS_PROP_DEBUG") != NULL) {
 		hdl->libzfs_prop_debug = B_TRUE;
 	}
 	if ((env = getenv("ZFS_SENDRECV_MAX_NVLIST")) != NULL) {
-		if ((error = zfs_nicestrtonum(hdl, env,
-		    &hdl->libzfs_max_nvlist))) {
-			errno = error;
-			(void) close(hdl->libzfs_fd);
-			free(hdl);
+		if (zfs_nicestrtonum(hdl, env, &hdl->libzfs_max_nvlist) != 0) {
+			libzfs_fini(hdl);
+			errno = EINVAL;
 			return (NULL);
 		}
 	} else {
@@ -1131,7 +1142,13 @@ libzfs_fini(libzfs_handle_t *hdl)
 	libzfs_mnttab_fini(hdl);
 	libzfs_core_fini();
 	regfree(&hdl->libzfs_urire);
-	zfs_btree_fini();
+
+	(void) pthread_mutex_lock(&libzfs_btree_lock);
+	ASSERT3S(libzfs_btree_refcount, >, 0);
+	if (--libzfs_btree_refcount == 0)
+		zfs_btree_fini();
+	(void) pthread_mutex_unlock(&libzfs_btree_lock);
+
 	fletcher_4_fini();
 #if LIBFETCH_DYNAMIC
 	if (hdl->libfetch != (void *)-1 && hdl->libfetch != NULL)
