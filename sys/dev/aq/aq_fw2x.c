@@ -61,6 +61,9 @@ enum aq_fw2x_caps_lo {
 	CAPS_LO_2P5GBASET_FD,
 	CAPS_LO_5GBASET_FD,
 	CAPS_LO_10GBASET_FD,
+	CAPS_LO_AUTONEG,
+	CAPS_LO_SMBUS_READ,
+	CAPS_LO_SMBUS_WRITE,
 };
 
 enum aq_fw2x_caps_hi {
@@ -176,12 +179,19 @@ struct aq_fw2x_mailbox // struct fwHostInterface
 #define FW2X_CAP_STATISTICS (1ull << (32 + CAPS_HI_STATISTICS))
 #define FW2X_CAP_TEMPERATURE (1ull << (32 + CAPS_HI_TEMPERATURE))
 
+// Pluggable module SMBus proxy
+#define FW2X_CAP_SMBUS_READ (1ull << CAPS_LO_SMBUS_READ)
+
+// Cable diagnostic
+#define FW2X_CAP_CABLE_DIAG (1ull << (32 + CAPS_HI_CABLE_DIAG))
+
 
 #define FW2X_RATE_MASK  (FW2X_RATE_100M | FW2X_RATE_1G | FW2X_RATE_2G5 | FW2X_RATE_5G | FW2X_RATE_10G)
 #define FW2X_EEE_MASK  (FW2X_FW_CAP_EEE_100M | FW2X_FW_CAP_EEE_1G | FW2X_FW_CAP_EEE_2G5 | FW2X_FW_CAP_EEE_5G | FW2X_FW_CAP_EEE_10G)
 
 
 #define FW2X_MPI_LED_ADDR           0x31c
+#define FW2X_MPI_RPC_ADDR           0x334
 #define FW2X_MPI_CONTROL_ADDR       0x368
 #define FW2X_MPI_STATE_ADDR         0x370
 
@@ -518,6 +528,102 @@ aq_fw2x_get_phy_fault(struct aq_hw* hw, uint16_t* fault)
 	return (0);
 }
 
+/* Request header the F/W expects at the head of the RPC buffer. */
+struct aq_fw2x_smbus_request {
+	uint32_t msg_id;
+	uint32_t device_id;
+	uint32_t address;
+	uint32_t length;
+} __packed;
+
+#define FW2X_SMBUS_MAX_READ	16
+
+/* Bus addresses in the 8-bit form struct ifi2creq carries. */
+#define FW2X_SFF_ADDR_BASE	0xa0
+#define FW2X_SFF_ADDR_DIAG	0xa2
+
+static int
+aq_fw2x_get_module_eeprom(struct aq_hw* hw, uint8_t dev_addr, uint8_t offset,
+    uint8_t len, uint8_t* data)
+{
+	struct aq_fw2x_smbus_request req = {0};
+	uint32_t buf[FW2X_SMBUS_MAX_READ / sizeof(uint32_t)];
+	uint64_t mpi_ctrl, req_bit;
+	uint32_t result;
+	uint32_t ndw;
+	int err;
+
+	if ((hw->fw_caps & FW2X_CAP_SMBUS_READ) == 0)
+		return (ENOTSUP);
+
+	if (len == 0 || len > FW2X_SMBUS_MAX_READ)
+		return (EINVAL);
+
+	if (dev_addr != FW2X_SFF_ADDR_BASE && dev_addr != FW2X_SFF_ADDR_DIAG)
+		return (EINVAL);
+
+	/* The F/W addresses the bus in the 7-bit form. */
+	req.device_id = dev_addr >> 1;
+	req.address = offset;
+	req.length = len;
+	ndw = (len + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+
+	mtx_lock(&hw->fw_mtx);
+
+	err = AQ_HW_WAIT_FOR((hw->rpc_addr =
+	    AQ_READ_REG(hw, FW2X_MPI_RPC_ADDR)) != 0, 100U, 100U);
+	if (err != 0)
+		goto out;
+
+	err = aq_hw_fw_upld_dwords(hw, hw->rpc_addr, (uint32_t*)&req,
+	    sizeof req / sizeof(uint32_t));
+	if (err != 0)
+		goto out;
+
+	/* Toggle the request bit and wait for the F/W to echo it back. */
+	mpi_ctrl = get_mpi_ctrl(hw);
+	req_bit = mpi_ctrl & FW2X_CAP_SMBUS_READ;
+	set_mpi_ctrl(hw, mpi_ctrl ^ FW2X_CAP_SMBUS_READ);
+
+	err = AQ_HW_WAIT_FOR((get_mpi_state(hw) & FW2X_CAP_SMBUS_READ) !=
+	    req_bit, 10, 10000);
+	if (err != 0) {
+		/*
+		 * Nothing else owns the buffer at rpc_addr, so withdraw the
+		 * request and wait for the state to follow before releasing
+		 * fw_mtx; otherwise the next caller uploads its header over
+		 * one the F/W is still servicing.
+		 */
+		set_mpi_ctrl(hw, mpi_ctrl);
+		(void)AQ_HW_WAIT_FOR((get_mpi_state(hw) &
+		    FW2X_CAP_SMBUS_READ) == req_bit, 10, 1000);
+		goto out;
+	}
+
+	err = aq_hw_fw_downld_dwords(hw, hw->rpc_addr + sizeof(uint32_t),
+	    &result, 1);
+	if (err != 0)
+		goto out;
+	if (result != 0) {
+		err = EIO;
+		goto out;
+	}
+
+	err = aq_hw_fw_downld_dwords(hw, hw->rpc_addr + 2 * sizeof(uint32_t),
+	    buf, ndw);
+	if (err == 0)
+		memcpy(data, buf, len);
+
+out:
+	mtx_unlock(&hw->fw_mtx);
+
+	if (err != 0)
+		trace_error(hw, dbg_fw,
+		    "fw2x> module EEPROM read FAILED, error %d", err);
+
+	return (err);
+}
+
 /* PHY MDIO access: MMD register read/write via the MAC's MDIO controller. */
 #define AQ_MDIO_IFACE(n)	(0x280 + (((n) - 1) * 4))
 #define AQ_MDIO_BUSY		0x80000000u	/* iface2 bit 31 */
@@ -701,6 +807,84 @@ aq_fw2x_get_thermal_limit(struct aq_hw* hw, int* limit_mc)
 	return (0);
 }
 
+/*
+ * Basic cable diagnostic.  1E.C470.F picks the normal routine over the
+ * extended one, .4 starts it and reads back set while it runs.  Status is
+ * three bits per pair in 1E.C800, pair A highest; the two reflection
+ * distances share one register per pair from 1E.C801 upwards, in metres.
+ */
+#define AQ_PHY_DIAG_PROV_REG	0xc470
+#define  AQ_PHY_DIAG_SELECT	0x8000		/* .F 0 = normal diagnostic */
+#define  AQ_PHY_DIAG_INITIATE	0x0010		/* .4 start, reads 1 while busy */
+#define AQ_PHY_CABLE_STATUS_REG	0xc800
+#define  AQ_PHY_CABLE_STATUS	0x0007
+#define AQ_PHY_CABLE_REFL_REG(n) (0xc801 + 2 * (n))
+
+#define AQ_CABLE_DIAG_POLLS	40		/* at hz/4 each, ten seconds */
+
+static int
+aq_fw2x_cable_diag(struct aq_hw* hw, struct aq_hw_cable_diag* cd)
+{
+	static const int status_shift[AQ_CABLE_PAIRS] = { 12, 8, 4, 0 };
+	uint16_t refl, v;
+	int err, i, timo;
+
+	if ((hw->fw_caps & FW2X_CAP_CABLE_DIAG) == 0)
+		return (ENOTSUP);
+
+	mtx_lock(&hw->fw_mtx);
+	aq_fw2x_phy_id_probe(hw);
+	err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL, AQ_PHY_DIAG_PROV_REG, &v);
+	if (err == 0 && v == 0xffff)
+		err = ENXIO;
+	/* .4 is self-clearing, so setting it again would start nothing. */
+	if (err == 0 && (v & AQ_PHY_DIAG_INITIATE) != 0)
+		err = EBUSY;
+	if (err == 0) {
+		v &= ~AQ_PHY_DIAG_SELECT;
+		v |= AQ_PHY_DIAG_INITIATE;
+		err = aq_fw2x_phy_write(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_DIAG_PROV_REG, v);
+	}
+	mtx_unlock(&hw->fw_mtx);
+	if (err != 0)
+		return (err);
+
+	/* The run outlasts any spin, so wait for it without holding fw_mtx. */
+	for (timo = AQ_CABLE_DIAG_POLLS; timo > 0; timo--) {
+		pause("aqcdiag", hz / 4);
+		mtx_lock(&hw->fw_mtx);
+		err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_DIAG_PROV_REG, &v);
+		mtx_unlock(&hw->fw_mtx);
+		if (err != 0)
+			return (err);
+		if ((v & AQ_PHY_DIAG_INITIATE) == 0)
+			break;
+	}
+	if (timo == 0) {
+		trace_error(hw, dbg_fw, "fw2x> cable diagnostic timed out");
+		return (ETIMEDOUT);
+	}
+
+	mtx_lock(&hw->fw_mtx);
+	err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL, AQ_PHY_CABLE_STATUS_REG,
+	    &v);
+	for (i = 0; err == 0 && i < AQ_CABLE_PAIRS; i++) {
+		err = aq_fw2x_phy_read(hw, AQ_PHY_MMD_GLOBAL,
+		    AQ_PHY_CABLE_REFL_REG(i), &refl);
+		if (err != 0)
+			break;
+		cd->pair[i].result = (v >> status_shift[i]) &
+		    AQ_PHY_CABLE_STATUS;
+		cd->pair[i].dist = refl >> 8;
+		cd->pair[i].far_dist = refl & 0xff;
+	}
+	mtx_unlock(&hw->fw_mtx);
+
+	return (err);
+}
+
 static int
 aq_fw2x_led_control(struct aq_hw* hw, uint32_t onoff)
 {
@@ -732,6 +916,9 @@ const struct aq_firmware_ops aq_fw2x_ops =
 	.phy_reset = aq_fw2x_phy_reset,
 	.thermal_arm = aq_fw2x_thermal_arm,
 	.get_thermal_limit = aq_fw2x_get_thermal_limit,
+	.cable_diag = aq_fw2x_cable_diag,
 
 	.led_control = aq_fw2x_led_control,
+
+	.get_module_eeprom = aq_fw2x_get_module_eeprom,
 };

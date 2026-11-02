@@ -102,6 +102,11 @@ struct aq_dev {
 	struct aq_hw          hw;
 
 	enum aq_media_type	media_type;
+	/* SFF-8472 subtypes of the module in the cage; 0 until one is read. */
+	int			sfp_ifm_100m;
+	int			sfp_ifm_1g;
+	int			sfp_ifm_10g;
+	bool			sfp_known;	/* the cage was identified */
 	uint32_t		link_speeds;
 	uint32_t		chip_features;
 	uint32_t		mbox_addr;
@@ -125,6 +130,9 @@ struct aq_dev {
 	uint16_t          phy_fault_last;	/* last fault code reported */
 	bool              phy_hot_last;		/* last over-temperature warning */
 	bool              link_read_failed;	/* link state read is failing */
+	struct aq_hw_cable_diag cable_diag;	/* result of the last run */
+	bool              cable_diag_valid;	/* cable_diag has been filled */
+	u_int             cable_diag_busy;	/* a run owns the hardware */
 	enum aq_thermal_state {
 		AQ_THERMAL_NORMAL = 0,	/* no thermal shutdown pending */
 		AQ_THERMAL_COOLING,	/* shut down; waiting to cool */
@@ -158,6 +166,7 @@ struct aq_dev {
 
 int aq_update_hw_stats(struct aq_dev *aq_dev);
 void aq_initmedia(struct aq_dev *aq_dev);
+void aq_sfp_forget(struct aq_dev *aq_dev);
 int aq_linkstat_isr(void *arg);
 int aq_isr_rx(void *arg);
 void aq_mediastatus_update(struct aq_dev *aq_dev, uint32_t link_speed, const struct aq_hw_fc_info *fc_neg);

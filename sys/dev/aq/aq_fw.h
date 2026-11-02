@@ -83,6 +83,9 @@ struct aq_firmware_ops
 	/* Reports the pre-shutdown PHY over-temperature warning. */
 	int (*get_phy_hot_warning)(struct aq_hw* hw, bool* hot);
 
+	/* Runs a cable diagnostic; sleeps, and disturbs an established link. */
+	int (*cable_diag)(struct aq_hw* hw, struct aq_hw_cable_diag* cd);
+
 	/* Resets the PHY (clears a latched thermal shutdown). */
 	int (*phy_reset)(struct aq_hw* hw);
 
@@ -93,6 +96,10 @@ struct aq_firmware_ops
 	int (*get_thermal_limit)(struct aq_hw* hw, int* limit_mc);
 
 	int (*led_control)(struct aq_hw* hw, uint32_t mode);
+
+	/* Reads the pluggable module EEPROM over the firmware SMBus proxy. */
+	int (*get_module_eeprom)(struct aq_hw* hw, uint8_t dev_addr,
+	    uint8_t offset, uint8_t len, uint8_t* data);
 };
 
 /* PHY global fault codes, register 1E.C850. */

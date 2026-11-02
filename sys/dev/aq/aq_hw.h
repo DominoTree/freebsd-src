@@ -168,6 +168,31 @@ struct aq_hw_link_info {
 	uint8_t state;
 };
 
+/* Per-pair time-domain reflectometry result; distances are whole metres. */
+#define	AQ_CABLE_PAIRS	4
+
+/* Crossover codes count forward from the reporting pair, not from pair A. */
+enum aq_cable_result {
+	AQ_CABLE_OK = 0,
+	AQ_CABLE_CROSSOVER_1 = 1,
+	AQ_CABLE_CROSSOVER_2 = 2,
+	AQ_CABLE_CROSSOVER_3 = 3,
+	AQ_CABLE_SHORT = 4,
+	AQ_CABLE_LOW_MISMATCH = 5,
+	AQ_CABLE_HIGH_MISMATCH = 6,
+	AQ_CABLE_OPEN = 7,
+};
+
+struct aq_hw_cable_pair {
+	uint8_t result;
+	uint8_t dist;
+	uint8_t far_dist;
+};
+
+struct aq_hw_cable_diag {
+	struct aq_hw_cable_pair pair[AQ_CABLE_PAIRS];
+};
+
 struct aq_hw {
 	void *aq_dev;
 	device_t dev;
@@ -209,6 +234,9 @@ struct aq_hw {
 
 	uint32_t mbox_addr;
 	struct aq_hw_fw_mbox mbox;
+
+	/* Atlantic 1: firmware RPC buffer, discovered on first use. */
+	uint32_t rpc_addr;
 
 	u_long flags;
 
@@ -381,6 +409,8 @@ int aq_hw_get_link_state(struct aq_hw *hw, uint32_t *link_speed,
 int aq_hw_set_link_speed(struct aq_hw *hw, uint32_t speed);
 
 int aq_hw_fw_downld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p, uint32_t cnt);
+int aq_hw_fw_upld_dwords(struct aq_hw *hw, uint32_t a, uint32_t *p,
+    uint32_t cnt);
 
 int aq_hw_reset(struct aq_hw *hw, bool reboot);
 
