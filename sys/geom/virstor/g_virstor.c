@@ -1789,7 +1789,7 @@ g_virstor_start(struct bio *b)
 
 		chunk_index = offset / chunk_size; /* round downwards */
 		in_chunk_offset = offset % chunk_size;
-		in_chunk_length = min(length, chunk_size - in_chunk_offset);
+		in_chunk_length = MIN(length, chunk_size - in_chunk_offset);
 		LOG_MSG(LVL_DEBUG, "Mapped %s(%ju, %ju) to (%zu,%zu,%zu)",
 		    b->bio_cmd == BIO_READ ? "R" : "W",
 		    offset, length,
