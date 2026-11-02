@@ -29,10 +29,12 @@
 #ifndef _NET_SFF8472_H_
 #define _NET_SFF8472_H_
 
+#include <net/sff8024.h>
+
 /*
  * The following set of constants are from Document SFF-8472
  * "Diagnostic Monitoring Interface for Optical Transceivers" revision
- * 11.3 published by the SFF Committee on June 11, 2013
+ * 12.5a published by SNIA on May 20, 2025
  *
  * The SFF standard defines two ranges of addresses, each 255 bytes
  * long for the storage of data and diagnostics on cables, such as
@@ -48,7 +50,8 @@
  * 0-55    Alarm and Warning Thresholds
  * 56-95   Cal Constants
  * 96-119  Real Time Diagnostic Interface
- * 120-127 Vendor Specific
+ * 120-126 Vendor Specific
+ * 127     Optional Page Select
  * 128-247 User Writable EEPROM
  * 248-255 Vendor Specific
  *
@@ -62,29 +65,33 @@
  * driver.
  */
 
-/* Table 3.1 Two-wire interface ID: Data Fields */
+/* Table 4-2 Data Fields - Address A0h */
 
 enum {
 	SFF_8472_BASE 		= 0xa0,   /* Base address for all our queries. */
-	SFF_8472_ID		= 0,  /* Transceiver Type (Table 3.2) */
-	SFF_8472_EXT_ID		= 1,  /* Extended transceiver type (Table 3.3) */
-	SFF_8472_CONNECTOR	= 2,  /* Connector type (Table 3.4) */
+	SFF_8472_ID		= 0,  /* Transceiver Type (Table 5-1) */
+	SFF_8472_EXT_ID		= 1,  /* Extended transceiver type (Table 5-2) */
+	SFF_8472_CONNECTOR	= 2,  /* Connector type (SFF-8024 Table 4-3) */
 	SFF_8472_TRANS_START	= 3,  /* Elec or Optical Compatibility
-				    * (Table 3.5) */
+				    * (Table 5-3) */
 	SFF_8472_TRANS_END	= 10,
 	SFF_8472_ENCODING	= 11, /* Encoding Code for high speed
 				     * serial encoding algorithm (see
-				     * Table 3.6) */
+				     * SFF-8024 Table 4-2) */
 	SFF_8472_BITRATE	= 12, /* Nominal signaling rate, units
 				     * of 100MBd.  (see details for
-				     * rates > 25.0Gb/s) */
+				     * rates > 25.4GBd) */
 	SFF_8472_RATEID		= 13, /* Type of rate select
 				     * functionality (see Table
-				     * 3.6a) */
+				     * 5-6) */
 	SFF_8472_LEN_SMF_KM	= 14, /* Link length supported for single
-				    * mode fiber, units of km */
+				    * mode fiber, units of km.
+				    * Alternatively copper cable
+				    * attenuation in dB at 12.9 GHz */
 	SFF_8472_LEN_SMF	= 15, /* Link length supported for single
-				    * mode fiber, units of 100 m */
+				    * mode fiber, units of 100 m.
+				    * Alternatively copper cable
+				    * attenuation in dB at 25.78 GHz */
 	SFF_8472_LEN_50UM	= 16, /* Link length supported for 50 um
 				    * OM2 fiber, units of 10 m */
 	SFF_8472_LEN_625UM	= 17, /* Link length supported for 62.5
@@ -93,13 +100,16 @@ enum {
 				    * OM4 fiber, units of 10m.
 				    * Alternatively copper or direct
 				    * attach cable, units of m */
-	SFF_8472_LEN_OM3	= 19, /* Link length supported for 50 um OM3 fiber, units of 10 m */
+	SFF_8472_LEN_OM3	= 19, /* Link length supported for 50 um
+				    * OM3 fiber, units of 10 m.
+				    * Alternatively copper or direct
+				    * attach cable multiplier and base
+				    * value */
 	SFF_8472_VENDOR_START 	= 20, /* Vendor name [Address A0h, Bytes
 				    * 20-35] */
 	SFF_8472_VENDOR_END 	= 35,
-	SFF_8472_TRANS		= 36, /* Transceiver Code for electronic
-				    * or optical compatibility (see
-				    * Table 3.5) */
+	SFF_8472_TRANS		= 36, /* Extended Specification Compliance
+				    * Code (see SFF-8024 Table 4-4) */
 	SFF_8472_VENDOR_OUI_START	= 37, /* Vendor OUI SFP vendor IEEE
 				    * company ID */
 	SFF_8472_VENDOR_OUI_END	= 39,
@@ -111,6 +121,8 @@ enum {
 				    * (Passive/Active Cable
 				    * Specification Compliance) */
 	SFF_8472_WAVELEN_END	= 61,
+	SFF_8472_FC_SPEED2	= 62, /* Fibre Channel Speed 2, selected by
+				    * byte 10 bit 1 (see Table 5-3) */
 	SFF_8472_CC_BASE	= 63, /* CC_BASE Check code for Base ID
 				    * Fields (addresses 0 to 62) */
 
@@ -121,33 +133,33 @@ enum {
 	SFF_8472_OPTIONS_MSB	= 64, /* Options Indicates which optional
 				    * transceiver signals are
 				    * implemented */
-	SFF_8472_OPTIONS_LSB	= 65, /* (see Table 3.7) */
+	SFF_8472_OPTIONS_LSB	= 65, /* (see Table 8-3) */
 	SFF_8472_BR_MAX		= 66, /* BR max Upper bit rate margin,
 				    * units of % (see details for
-				    * rates > 25.0Gb/s) */
+				    * rates > 25.4GBd) */
 	SFF_8472_BR_MIN		= 67, /* Lower bit rate margin, units of
 				    * % (see details for rates >
-				    * 25.0Gb/s) */
+				    * 25.4GBd) */
 	SFF_8472_SN_START 	= 68, /* Vendor SN [Address A0h, Bytes 68-83] */
 	SFF_8472_SN_END 	= 83,
-	SFF_8472_DATE_START	= 84, /* Date code Vendor's manufacturing
-				    * date code (see Table 3.8) */
+	SFF_8472_DATE_START	= 84, /* Date code Vendor’s manufacturing
+				    * date code (see Table 8-4) */
 	SFF_8472_DATE_END	= 91,
 	SFF_8472_DIAG_TYPE	= 92, /* Diagnostic Monitoring Type
 				    * Indicates which type of
 				    * diagnostic monitoring is
 				    * implemented (if any) in the
-				    * transceiver (see Table 3.9)
+				    * transceiver (see Table 8-5)
 				    */
 
 	SFF_8472_ENHANCED	= 93, /* Enhanced Options Indicates which
 				    * optional enhanced features are
 				    * implemented (if any) in the
-				    * transceiver (see Table 3.10) */
+				    * transceiver (see Table 8-6) */
 	SFF_8472_COMPLIANCE	= 94, /* SFF-8472 Compliance Indicates
 				    * which revision of SFF-8472 the
 				    * transceiver complies with.  (see
-				    * Table 3.12)*/
+				    * Table 8-8)*/
 	SFF_8472_CC_EXT		= 95, /* Check code for the Extended ID
 				    * Fields (addresses 64 to 94)
 				    */
@@ -158,6 +170,33 @@ enum {
 	SFF_8472_RESERVED_START	= 128,
 	SFF_8472_RESERVED_END	= 255
 };
+
+/*
+ * Individual fields within the compatibility block spanning
+ * SFF_8472_TRANS_START to SFF_8472_TRANS_END.  Bit assignments below are
+ * from SFF-8472 rev 12.5a table 5-3.  Only the codes with an ifmedia
+ * equivalent are transcribed; the block also carries InfiniBand, ESCON,
+ * SONET and Fibre Channel codes.
+ */
+enum {
+	SFF_8472_TRANS_10G	= 3,  /* 10G Ethernet compliance */
+	SFF_8472_TRANS_1G	= 6,  /* Ethernet compliance */
+	SFF_8472_TRANS_CABLE	= 8,  /* SFP+ cable technology */
+};
+
+#define SFF_8472_10G_SR		(1 << 4)
+#define SFF_8472_10G_LR		(1 << 5)
+#define SFF_8472_10G_LRM	(1 << 6)
+#define SFF_8472_10G_ER		(1 << 7)
+
+#define SFF_8472_1G_SX		(1 << 0)
+#define SFF_8472_1G_LX		(1 << 1)
+#define SFF_8472_1G_CX		(1 << 2)
+#define SFF_8472_1G_T		(1 << 3)
+#define SFF_8472_100_FX		(1 << 5) /* same byte as the 1G codes */
+
+#define SFF_8472_CABLE_PASSIVE	(1 << 2)
+#define SFF_8472_CABLE_ACTIVE	(1 << 3)
 
 #define SFF_8472_DIAG_IMPL	(1 << 6) /* Required to be 1 */
 #define SFF_8472_DIAG_INTERNAL	(1 << 5) /* Internal measurements. */
@@ -175,7 +214,7 @@ enum {
 enum {SFF_8472_DIAG = 0xa2};  /* Base address for diagnostics. */
 
  /*
-  *  Table 3.15 Alarm and Warning Thresholds All values are 2 bytes
+  *  Table 9-5 Alarm and Warning Thresholds All values are 2 bytes
   * and MUST be read in a single read operation starting at the MSB
   */
 
@@ -323,7 +362,11 @@ enum {
 
 /*
  * Select Read/write bit that allows software disable of
+<<<<<<< HEAD
  * laser. Writing 1 disables laser. See Table 3.11 for
+=======
+ * laser. Writing ‘1’ disables laser. See Table 8-7 for
+>>>>>>> b68b2e47ae3a (sff8472: refresh the byte map and identifiers against rev 12.5a)
  * enable/disable timing requirements. This bit is “OR”d with the hard
  * TX_DISABLE pin value. Note, per SFP MSA TX_DISABLE pin is default
  * enabled unless pulled low by hardware. If Soft TX Disable is not
@@ -348,12 +391,17 @@ enum {
      
 /*
  * Read/write bit that allows software rate select control. Writing
+<<<<<<< HEAD
  * 1 selects full bandwidth operation. This bit is “OR”d with the
  * hard Rate_Select, AS(0) or RS(0) pin value. See Table 3.11 for
+=======
+ * ‘1’ selects full bandwidth operation. This bit is “OR’d with the
+ * hard Rate_Select, AS(0) or RS(0) pin value. See Table 8-7 for
+>>>>>>> b68b2e47ae3a (sff8472: refresh the byte map and identifiers against rev 12.5a)
  * timing requirements. Default at power up is logic zero/low. If Soft
  * Rate Select is not implemented, the transceiver ignores the value
  * of this bit. Note: Specific transceiver behaviors of this bit are
- * identified in Table 3.6a and referenced documents. See Table 3.18a,
+ * identified in Table 5-6 and referenced documents. See Table 10-1,
  * byte 118, bit 3 for Soft RS(1) Select.
  */
 #define SFF_8472_STATUS_SOFT_RATE_SELECT (1 << 3)
@@ -377,83 +425,6 @@ enum {
  */
 #define SFF_8472_STATUS_DATA_READY (1 << 0)
 
-/*
- * Table 3.2 Identifier values.
- * Identifier constants has taken from SFF-8024 rev 4.6 table 4.1
- * (as referenced by table 3.2 footer)
- * */
-enum {
-	SFF_8024_ID_UNKNOWN	= 0x0, /* Unknown or unspecified */
-	SFF_8024_ID_GBIC	= 0x1, /* GBIC */
-	SFF_8024_ID_SFF		= 0x2, /* Module soldered to motherboard (ex: SFF)*/
-	SFF_8024_ID_SFP		= 0x3, /* SFP or SFP “Plus” */
-	SFF_8024_ID_XBI		= 0x4, /* 300 pin XBI */
-	SFF_8024_ID_XENPAK	= 0x5, /* Xenpak */
-	SFF_8024_ID_XFP		= 0x6, /* XFP */
-	SFF_8024_ID_XFF		= 0x7, /* XFF */
-	SFF_8024_ID_XFPE	= 0x8, /* XFP-E */
-	SFF_8024_ID_XPAK	= 0x9, /* XPAk */
-	SFF_8024_ID_X2		= 0xA, /* X2 */
-	SFF_8024_ID_DWDM_SFP	= 0xB, /* DWDM-SFP */
-	SFF_8024_ID_QSFP	= 0xC, /* QSFP */
-	SFF_8024_ID_QSFPPLUS	= 0xD, /* QSFP+ or later */
-	SFF_8024_ID_CXP		= 0xE, /* CXP */
-	SFF_8024_ID_HD4X	= 0xF, /* Shielded Mini Multilane HD 4X */
-	SFF_8024_ID_HD8X	= 0x10, /* Shielded Mini Multilane HD 8X */
-	SFF_8024_ID_QSFP28	= 0x11, /* QSFP28 or later */
-	SFF_8024_ID_CXP2	= 0x12, /* CXP2 (aka CXP28) */
-	SFF_8024_ID_CDFP	= 0x13, /* CDFP (Style 1/Style 2) */
-	SFF_8024_ID_SMM4	= 0x14, /* Shielded Mini Multilate HD 4X Fanout */
-	SFF_8024_ID_SMM8	= 0x15, /* Shielded Mini Multilate HD 8X Fanout */
-	SFF_8024_ID_CDFP3	= 0x16, /* CDFP (Style3) */
-	SFF_8024_ID_MICROQSFP	= 0x17, /* microQSFP */
-	SFF_8024_ID_QSFP_DD	= 0x18, /* QSFP-DD 8X Pluggable Transceiver */
-	SFF_8024_ID_OSFP8X	= 0x19, /* OSFP 8X Pluggable Transceiver */
-	SFF_8024_ID_SFP_DD	= 0x1A, /* SFP-DD 2X Pluggable Transceiver */
-	SFF_8024_ID_DSFP	= 0x1B, /* DSFP Dual SFF Pluggable Transceiver */
-	SFF_8024_ID_X4ML	= 0x1C, /* x4 MiniLink/OcuLink */
-	SFF_8024_ID_X8ML	= 0x1D, /* x8 MiniLink */
-	SFF_8024_ID_QSFP_CMIS	= 0x1E, /* QSFP+ or later w/ Common Management
-					   Interface Specification */
-	SFF_8024_ID_LAST	= SFF_8024_ID_QSFP_CMIS
-};
-
-#if defined(_WANT_SFF_8024_ID) || defined(_WANT_SFF_8472_ID)
-static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
-	"Unknown",
-	"GBIC",
-	"SFF",
-	"SFP/SFP+/SFP28",
-	"XBI",
-	"Xenpak",
-	"XFP",
-	"XFF",
-	"XFP-E",
-	"XPAK",
-	"X2",
-	"DWDM-SFP/SFP+",
-	"QSFP",
-	"QSFP+",
-	"CXP",
-	"HD4X",
-	"HD8X",
-	"QSFP28",
-	"CXP2",
-	"CDFP",
-	"SMM4",
-	"SMM8",
-	"CDFP3",
-	"microQSFP",
-	"QSFP-DD",
-	"QSFP8X",
-	"SFP-DD",
-	"DSFP",
-	"x4MiniLink/OcuLink",
-	"x8MiniLink",
-	"QSFP+(CIMS)"
-};
-#endif
-
 /* Keep compatibility with old definitions */
 #define	SFF_8472_ID_UNKNOWN	SFF_8024_ID_UNKNOWN
 #define	SFF_8472_ID_GBIC	SFF_8024_ID_GBIC
@@ -473,7 +444,7 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
 #define	sff_8472_id		sff_8024_id
 
 /*
- * Table 3.9 Diagnostic Monitoring Type (byte 92)
+ * Table 8-5 Diagnostic Monitoring Type (byte 92)
  * bits described.
  */
 
@@ -499,10 +470,10 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
  */
 #define	SFF_8472_DDM_PMTYPE	(1 << 3)
 
-/* Table 3.13 and 3.14 Temperature Conversion Values */
+/* Table 9-1 and 9-2 Temperature Conversion Values */
 #define SFF_8472_TEMP_SIGN (1 << 15)
 #define SFF_8472_TEMP_SHIFT  8
-#define SFF_8472_TEMP_MSK  0xEF00
+#define SFF_8472_TEMP_MSK  0x7F00
 #define SFF_8472_TEMP_FRAC 0x00FF
 
 /* Internal Callibration Conversion factors */
@@ -517,10 +488,11 @@ static const char *sff_8024_id[SFF_8024_ID_LAST + 1] = {
 /*
  * Represented as a 16 bit unsigned integer with the current defined
  * as the full 16 bit value (0 – 65535) with LSB equal to 2 uA,
- * yielding a total range of 0 to 131 mA.
+ * yielding a total range of 0 to 131 mA.  Dividing by this factor
+ * yields milliamps.
  */
 
-#define SFF_8472_BIAS_FACTOR 2000.0 
+#define SFF_8472_BIAS_FACTOR 500.0
 
 /*
  * Represented as a 16 bit unsigned integer with the power defined as

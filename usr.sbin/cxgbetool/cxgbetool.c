@@ -2800,7 +2800,7 @@ modinfo(int argc, const char *argv[])
 	char string[16], *p;
 	struct t4_i2c_data i2cd;
 	int rc, i;
-	uint16_t temp, vcc, tx_bias, tx_power, rx_power;
+	uint16_t vcc, tx_bias, tx_power, rx_power;
 
 	if (argc < 1) {
 		warnx("must supply a port");
@@ -2836,10 +2836,7 @@ modinfo(int argc, const char *argv[])
 	if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 		goto fail;
 
-	if (i2cd.data[0] > SFF_8472_ID_LAST)
-		printf("Unknown ID\n");
-	else
-		printf("ID: %s\n", sff_8472_id[i2cd.data[0]]);
+	printf("ID: %s\n", sff_8024_id_name(i2cd.data[0]));
 
 	bzero(&string, sizeof(string));
 	for (i = SFF_8472_VENDOR_START; i < SFF_8472_VENDOR_END; i++) {
@@ -2891,14 +2888,7 @@ modinfo(int argc, const char *argv[])
 		i2cd.offset = SFF_8472_TEMP;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 			goto fail;
-		temp = i2cd.data[0] << 8;
-		printf("Temp: ");
-		if ((temp & SFF_8472_TEMP_SIGN) == SFF_8472_TEMP_SIGN)
-			printf("-");
-		else
-			printf("+");
-		printf("%dC\n", (temp & SFF_8472_TEMP_MSK) >>
-		    SFF_8472_TEMP_SHIFT);
+		printf("Temp: %+dC\n", (int8_t)i2cd.data[0]);
 
 		i2cd.offset = SFF_8472_VCC;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
@@ -2910,7 +2900,7 @@ modinfo(int argc, const char *argv[])
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)
 			goto fail;
 		tx_bias = i2cd.data[0] << 8;
-		printf("TX Bias %fuA\n", tx_bias / SFF_8472_BIAS_FACTOR);
+		printf("TX Bias %fmA\n", tx_bias / SFF_8472_BIAS_FACTOR);
 
 		i2cd.offset = SFF_8472_TX_POWER;
 		if ((rc = doit(CHELSIO_T4_GET_I2C, &i2cd)) != 0)

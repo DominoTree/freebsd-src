@@ -478,7 +478,7 @@ ifconfig_sfp_get_sfp_vendor_info(ifconfig_handle_t *h,
 
 /*
  * Converts internal temperature (SFF-8472, SFF-8436)
- * 16-bit unsigned value to human-readable representation:
+ * 16-bit signed value to human-readable representation:
  *
  * Internally measured Module temperature are represented
  * as a 16-bit signed twos complement value in increments of
@@ -488,13 +488,13 @@ ifconfig_sfp_get_sfp_vendor_info(ifconfig_handle_t *h,
 static double
 get_sff_temp(struct i2c_info *ii, uint8_t addr, uint8_t off)
 {
-	double d;
 	uint8_t buf[2];
 
 	read_i2c(ii, addr, off, 2, buf);
-	d = (double)buf[0];
-	d += (double)buf[1] / 256;
-	return (d);
+	if (ii->error != 0)
+		return (0);
+
+	return (temp_C((buf[0] << 8) | buf[1]));
 }
 
 /*
@@ -508,6 +508,9 @@ get_sff_voltage(struct i2c_info *ii, uint8_t addr, uint8_t off)
 	uint8_t buf[2];
 
 	read_i2c(ii, addr, off, 2, buf);
+	if (ii->error != 0)
+		return (0);
+
 	d = (double)((buf[0] << 8) | buf[1]);
 	return (d / 10000);
 }
@@ -535,6 +538,13 @@ bias_mA(uint16_t bias)
 {
 	/* Bias current is specified in units of 2 uA. */
 	return (1.0 * bias / 500);
+}
+
+double
+temp_C(uint16_t temp)
+{
+	/* Temperature is signed, in units of 1/256 degree Celsius. */
+	return (1.0 * (int16_t)temp / 256);
 }
 
 static uint16_t
@@ -708,28 +718,13 @@ ifconfig_sfp_free_sfp_status(struct ifconfig_sfp_status *ss)
 }
 
 static const char *
-sfp_id_string_alt(uint8_t value)
-{
-	const char *id;
-
-	if (value <= SFF_8024_ID_LAST)
-		id = sff_8024_id[value];
-	else if (value > 0x80)
-		id = "Vendor specific";
-	else
-		id = "Reserved";
-
-	return (id);
-}
-
-static const char *
 sfp_conn_string_alt(uint8_t value)
 {
 	const char *conn;
 
-	if (value >= 0x0D && value <= 0x1F)
+	if (value >= 0x0E && value <= 0x1F)
 		conn = "Unallocated";
-	else if (value >= 0x24 && value <= 0x7F)
+	else if (value >= 0x29 && value <= 0x7F)
 		conn = "Unallocated";
 	else
 		conn = "Vendor specific";
@@ -743,7 +738,7 @@ ifconfig_sfp_get_sfp_info_strings(const struct ifconfig_sfp_info *sfp,
 {
 	get_sfp_info_strings(sfp, strings);
 	if (strings->sfp_id == NULL)
-		strings->sfp_id = sfp_id_string_alt(sfp->sfp_id);
+		strings->sfp_id = sff_8024_id_name(sfp->sfp_id);
 	if (strings->sfp_conn == NULL)
 		strings->sfp_conn = sfp_conn_string_alt(sfp->sfp_conn);
 	if (strings->sfp_rev == NULL)
