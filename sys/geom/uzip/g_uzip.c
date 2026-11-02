@@ -612,6 +612,8 @@ g_uzip_parse_toc(struct g_uzip_softc *sc, struct g_provider *pp,
 					break;
 				}
 			}
+			if (j == sc->nblocks + 1)
+				goto error_offset;
 			sc->toc[i].blen = sc->toc[j].offset -
 			    sc->toc[i].offset;
 			if (BLK_ENDS(sc, i) > pp->mediasize) {
