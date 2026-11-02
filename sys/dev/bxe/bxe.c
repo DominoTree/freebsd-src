@@ -709,6 +709,9 @@ static void bxe_del_cdev(struct bxe_softc *sc);
 int bxe_grc_dump(struct bxe_softc *sc);
 static int bxe_alloc_buf_rings(struct bxe_softc *sc);
 static void bxe_free_buf_rings(struct bxe_softc *sc);
+static int bxe_get_cur_phy_idx(struct bxe_softc *sc);
+static int bxe_media_detect(struct bxe_softc *sc);
+static void bxe_media_refine_1g_sfp(struct bxe_softc *sc);
 
 /* calculate crc32 on a buffer (NOTE: crc32_length MUST be aligned to 8) */
 uint32_t
@@ -4482,6 +4485,47 @@ bxe_handle_chip_tq(void *context,
 }
 
 /*
+ * Reads from the SFP+ module i2c bus on behalf of SIOCGI2C.
+ *
+ * Returns:
+ *   0 = Success, >0 Failure
+ */
+static int
+bxe_i2c_req(struct bxe_softc *sc,
+            struct ifi2creq  *req)
+{
+    struct elink_phy *phy;
+    elink_status_t rc;
+
+    if ((req->dev_addr != ELINK_I2C_DEV_ADDR_A0) &&
+        (req->dev_addr != ELINK_I2C_DEV_ADDR_A2)) {
+        return (EINVAL);
+    }
+
+    if (req->len > sizeof(req->data)) {
+        return (EINVAL);
+    }
+
+    /* The PHY is not programmed until the interface has been brought up. */
+    if (!(if_getdrvflags(sc->ifp) & IFF_DRV_RUNNING)) {
+        return (ENXIO);
+    }
+
+    phy = &sc->link_params.phy[bxe_get_cur_phy_idx(sc)];
+
+    bxe_acquire_phy_lock(sc);
+    rc = elink_read_sfp_module_eeprom(phy, &sc->link_params, req->dev_addr,
+                                      req->offset, req->len, req->data);
+    bxe_release_phy_lock(sc);
+
+    if (rc == ELINK_OP_NOT_SUPPORTED) {
+        return (EOPNOTSUPP);
+    }
+
+    return ((rc == ELINK_STATUS_OK) ? 0 : EIO);
+}
+
+/*
  * Handles any IOCTL calls from the operating system.
  *
  * Returns:
@@ -4681,6 +4725,26 @@ bxe_ioctl(if_t ifp,
               (command & 0xff));
         error = ifmedia_ioctl(ifp, ifr, &sc->ifmedia, command);
         break;
+
+    case SIOCGI2C:
+    {
+        struct ifi2creq i2c;
+
+        BLOGD(sc, DBG_IOCTL, "Received SIOCGI2C ioctl\n");
+
+        error = copyin(ifr_data_get_ptr(ifr), &i2c, sizeof(i2c));
+        if (error) {
+            break;
+        }
+
+        error = bxe_i2c_req(sc, &i2c);
+        if (error) {
+            break;
+        }
+
+        error = copyout(&i2c, ifr_data_get_ptr(ifr), sizeof(i2c));
+        break;
+    }
 
     default:
         BLOGD(sc, DBG_IOCTL, "Received Unknown Ioctl (cmd=%lu)\n",
@@ -6997,6 +7061,10 @@ bxe_link_attn(struct bxe_softc *sc)
     elink_link_update(&sc->link_params, &sc->link_vars);
 
     if (sc->link_vars.link_up) {
+
+        /* elink has classified the module by now, unlike at attach */
+        bxe_media_detect(sc);
+        bxe_media_refine_1g_sfp(sc);
 
         /* dropless flow control */
         if (!CHIP_IS_E1(sc) && sc->dropless_fc) {
@@ -13901,6 +13969,44 @@ bxe_media_detect(struct bxe_softc *sc)
     return port_type;
 }
 
+/* SFF-8472 table 3.5 byte 6, gigabit ethernet compliance codes. */
+#define BXE_SFF_1G_COMP_ADDR   0x6
+#define BXE_SFF_1G_COMP_LX     (1 << 1)
+#define BXE_SFF_1G_COMP_CX     (1 << 2)
+#define BXE_SFF_1G_COMP_BASE_T (1 << 3)
+
+/*
+ * elink has no copper-SFP media type and calls every 1G module fiber.
+ * Name the medium from the module itself.  Caller holds the PHY lock.
+ */
+static void
+bxe_media_refine_1g_sfp(struct bxe_softc *sc)
+{
+    struct elink_phy *phy;
+    uint8_t comp;
+
+    phy = &sc->link_params.phy[bxe_get_cur_phy_idx(sc)];
+
+    if (phy->media_type != ELINK_ETH_PHY_SFP_1G_FIBER) {
+        return;
+    }
+
+    if (elink_read_sfp_module_eeprom(phy, &sc->link_params,
+                                     ELINK_I2C_DEV_ADDR_A0,
+                                     BXE_SFF_1G_COMP_ADDR, 1,
+                                     &comp) != ELINK_STATUS_OK) {
+        return;
+    }
+
+    if (comp & BXE_SFF_1G_COMP_BASE_T) {
+        sc->media = IFM_1000_T;
+    } else if (comp & BXE_SFF_1G_COMP_LX) {
+        sc->media = IFM_1000_LX;
+    } else if (comp & BXE_SFF_1G_COMP_CX) {
+        sc->media = IFM_1000_CX;
+    }
+}
+
 #define GET_FIELD(value, fname)                     \
     (((value) & (fname##_MASK)) >> (fname##_SHIFT))
 #define IGU_FID(val) GET_FIELD((val), IGU_REG_MAPPING_MEMORY_FID)
@@ -15130,12 +15236,11 @@ bxe_free_hsi_mem(struct bxe_softc *sc)
 
         if (fp->tx_mbuf_tag != NULL) {
             for (j = 0; j < TX_BD_TOTAL; j++) {
-                if (fp->tx_mbuf_chain[j].m_map != NULL) {
-                    bus_dmamap_unload(fp->tx_mbuf_tag,
-                                      fp->tx_mbuf_chain[j].m_map);
-                    bus_dmamap_destroy(fp->tx_mbuf_tag,
-                                       fp->tx_mbuf_chain[j].m_map);
-                }
+                bus_dmamap_unload(fp->tx_mbuf_tag,
+                                  fp->tx_mbuf_chain[j].m_map);
+                bus_dmamap_destroy(fp->tx_mbuf_tag,
+                                   fp->tx_mbuf_chain[j].m_map);
+                fp->tx_mbuf_chain[j].m_map = NULL;
             }
 
             bus_dma_tag_destroy(fp->tx_mbuf_tag);
@@ -15148,18 +15253,16 @@ bxe_free_hsi_mem(struct bxe_softc *sc)
 
         if (fp->rx_mbuf_tag != NULL) {
             for (j = 0; j < RX_BD_TOTAL; j++) {
-                if (fp->rx_mbuf_chain[j].m_map != NULL) {
-                    bus_dmamap_unload(fp->rx_mbuf_tag,
-                                      fp->rx_mbuf_chain[j].m_map);
-                    bus_dmamap_destroy(fp->rx_mbuf_tag,
-                                       fp->rx_mbuf_chain[j].m_map);
-                }
+                bus_dmamap_unload(fp->rx_mbuf_tag,
+                                  fp->rx_mbuf_chain[j].m_map);
+                bus_dmamap_destroy(fp->rx_mbuf_tag,
+                                   fp->rx_mbuf_chain[j].m_map);
+                fp->rx_mbuf_chain[j].m_map = NULL;
             }
 
-            if (fp->rx_mbuf_spare_map != NULL) {
-                bus_dmamap_unload(fp->rx_mbuf_tag, fp->rx_mbuf_spare_map);
-                bus_dmamap_destroy(fp->rx_mbuf_tag, fp->rx_mbuf_spare_map);
-            }
+            bus_dmamap_unload(fp->rx_mbuf_tag, fp->rx_mbuf_spare_map);
+            bus_dmamap_destroy(fp->rx_mbuf_tag, fp->rx_mbuf_spare_map);
+            fp->rx_mbuf_spare_map = NULL;
 
             /***************************/
             /* FP RX TPA MBUF DMA MAPS */
@@ -15168,20 +15271,18 @@ bxe_free_hsi_mem(struct bxe_softc *sc)
             max_agg_queues = MAX_AGG_QS(sc);
 
             for (j = 0; j < max_agg_queues; j++) {
-                if (fp->rx_tpa_info[j].bd.m_map != NULL) {
-                    bus_dmamap_unload(fp->rx_mbuf_tag,
-                                      fp->rx_tpa_info[j].bd.m_map);
-                    bus_dmamap_destroy(fp->rx_mbuf_tag,
-                                       fp->rx_tpa_info[j].bd.m_map);
-                }
+                bus_dmamap_unload(fp->rx_mbuf_tag,
+                                  fp->rx_tpa_info[j].bd.m_map);
+                bus_dmamap_destroy(fp->rx_mbuf_tag,
+                                   fp->rx_tpa_info[j].bd.m_map);
+                fp->rx_tpa_info[j].bd.m_map = NULL;
             }
 
-            if (fp->rx_tpa_info_mbuf_spare_map != NULL) {
-                bus_dmamap_unload(fp->rx_mbuf_tag,
-                                  fp->rx_tpa_info_mbuf_spare_map);
-                bus_dmamap_destroy(fp->rx_mbuf_tag,
-                                   fp->rx_tpa_info_mbuf_spare_map);
-            }
+            bus_dmamap_unload(fp->rx_mbuf_tag,
+                              fp->rx_tpa_info_mbuf_spare_map);
+            bus_dmamap_destroy(fp->rx_mbuf_tag,
+                               fp->rx_tpa_info_mbuf_spare_map);
+            fp->rx_tpa_info_mbuf_spare_map = NULL;
 
             bus_dma_tag_destroy(fp->rx_mbuf_tag);
             fp->rx_mbuf_tag = NULL;
@@ -15193,20 +15294,18 @@ bxe_free_hsi_mem(struct bxe_softc *sc)
 
         if (fp->rx_sge_mbuf_tag != NULL) {
             for (j = 0; j < RX_SGE_TOTAL; j++) {
-                if (fp->rx_sge_mbuf_chain[j].m_map != NULL) {
-                    bus_dmamap_unload(fp->rx_sge_mbuf_tag,
-                                      fp->rx_sge_mbuf_chain[j].m_map);
-                    bus_dmamap_destroy(fp->rx_sge_mbuf_tag,
-                                       fp->rx_sge_mbuf_chain[j].m_map);
-                }
+                bus_dmamap_unload(fp->rx_sge_mbuf_tag,
+                                  fp->rx_sge_mbuf_chain[j].m_map);
+                bus_dmamap_destroy(fp->rx_sge_mbuf_tag,
+                                   fp->rx_sge_mbuf_chain[j].m_map);
+                fp->rx_sge_mbuf_chain[j].m_map = NULL;
             }
 
-            if (fp->rx_sge_mbuf_spare_map != NULL) {
-                bus_dmamap_unload(fp->rx_sge_mbuf_tag,
-                                  fp->rx_sge_mbuf_spare_map);
-                bus_dmamap_destroy(fp->rx_sge_mbuf_tag,
-                                   fp->rx_sge_mbuf_spare_map);
-            }
+            bus_dmamap_unload(fp->rx_sge_mbuf_tag,
+                              fp->rx_sge_mbuf_spare_map);
+            bus_dmamap_destroy(fp->rx_sge_mbuf_tag,
+                               fp->rx_sge_mbuf_spare_map);
+            fp->rx_sge_mbuf_spare_map = NULL;
 
             bus_dma_tag_destroy(fp->rx_sge_mbuf_tag);
             fp->rx_sge_mbuf_tag = NULL;
@@ -15815,6 +15914,39 @@ bxe_init_multi_cos(struct bxe_softc *sc)
 }
 
 static int
+bxe_read_temperature(struct bxe_softc *sc, int *decikelvin)
+{
+    uint32_t temp;
+
+    if (!SHMEM2_HAS(sc, temperature_in_half_celsius)) {
+        return (ENOTSUP);
+    }
+
+    temp = SHMEM2_RD(sc, temperature_in_half_celsius);
+    if (temp == 0) {
+        return (ENXIO);
+    }
+
+    /* half degrees Celsius -> decikelvin */
+    *decikelvin = (int)(temp * 5 + 2732);
+
+    return (0);
+}
+
+static int
+bxe_sysctl_temperature(SYSCTL_HANDLER_ARGS)
+{
+    struct bxe_softc *sc = (struct bxe_softc *)arg1;
+    int rc, val;
+
+    if ((rc = bxe_read_temperature(sc, &val)) != 0) {
+        return (rc);
+    }
+
+    return (sysctl_handle_int(oidp, &val, 0, req));
+}
+
+static int
 bxe_sysctl_state(SYSCTL_HANDLER_ARGS)
 {
     struct bxe_softc *sc;
@@ -15996,7 +16128,7 @@ bxe_add_sysctls(struct bxe_softc *sc)
     struct sysctl_oid_list *queue_top_children, *queue_children;
     char queue_num_buf[32];
     uint32_t q_stat;
-    int i, j;
+    int i, j, temp_dk;
 
     ctx = device_get_sysctl_ctx(sc->dev);
     children = SYSCTL_CHILDREN(device_get_sysctl_tree(sc->dev));
@@ -16075,6 +16207,12 @@ bxe_add_sysctls(struct bxe_softc *sc)
     SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "state",
         CTLTYPE_UINT | CTLFLAG_RW | CTLFLAG_MPSAFE, sc, 0,
         bxe_sysctl_state, "IU", "dump driver state");
+
+    if (bxe_read_temperature(sc, &temp_dk) == 0) {
+        SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "temperature",
+            CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MPSAFE, sc, 0,
+            bxe_sysctl_temperature, "IK", "device temperature");
+    }
 
     for (i = 0; i < BXE_NUM_ETH_STATS; i++) {
         SYSCTL_ADD_PROC(ctx, children, OID_AUTO,
@@ -16182,6 +16320,88 @@ bxe_destroy_fp_mutexs(struct bxe_softc *sc)
 }
 
 
+enum bxe_attach_stage {
+    BXE_STAGE_NONE = 0,
+    BXE_STAGE_BUSMASTER,
+    BXE_STAGE_BARS,
+    BXE_STAGE_MUTEXES,
+    BXE_STAGE_CHIP_TQ,
+    BXE_STAGE_IFNET,
+    BXE_STAGE_CDEV,
+    BXE_STAGE_INTR,
+    BXE_STAGE_FP_MUTEXES,
+    BXE_STAGE_BUF_RINGS,
+    BXE_STAGE_ILT,
+    BXE_STAGE_HSI
+};
+
+static void
+bxe_teardown(struct bxe_softc *sc, enum bxe_attach_stage stage)
+{
+    device_t dev = sc->dev;
+
+    if (stage >= BXE_STAGE_CDEV) {
+        bxe_del_cdev(sc);
+    }
+
+    if (stage >= BXE_STAGE_CHIP_TQ) {
+        bxe_periodic_stop(sc);
+
+        atomic_store_rel_long(&sc->chip_tq_flags, CHIP_TQ_NONE);
+        if (sc->chip_tq != NULL) {
+            taskqueue_drain(sc->chip_tq, &sc->chip_tq_task);
+            taskqueue_free(sc->chip_tq);
+            sc->chip_tq = NULL;
+        }
+        taskqueue_drain_timeout(taskqueue_thread, &sc->sp_err_timeout_task);
+    }
+
+    if (sc->state != BXE_STATE_CLOSED) {
+        BXE_CORE_LOCK(sc);
+        bxe_nic_unload(sc, UNLOAD_CLOSE, TRUE);
+        sc->state = BXE_STATE_DISABLED;
+        BXE_CORE_UNLOCK(sc);
+    }
+
+    if (stage >= BXE_STAGE_IFNET) {
+        if (sc->ifp != NULL) {
+            ether_ifdetach(sc->ifp);
+        }
+        ifmedia_removeall(&sc->ifmedia);
+    }
+
+    if (stage >= BXE_STAGE_HSI) {
+        bxe_free_hsi_mem(sc);
+    }
+    if (stage >= BXE_STAGE_ILT) {
+        bxe_free_ilt_mem(sc);
+    }
+    if (stage >= BXE_STAGE_BUF_RINGS) {
+        bxe_free_buf_rings(sc);
+    }
+    if (stage >= BXE_STAGE_INTR) {
+        bxe_interrupt_free(sc);
+    }
+    if (stage >= BXE_STAGE_FP_MUTEXES) {
+        bxe_destroy_fp_mutexs(sc);
+    }
+    if (stage >= BXE_STAGE_MUTEXES) {
+        bxe_release_mutexes(sc);
+    }
+    if (stage >= BXE_STAGE_BARS) {
+        bxe_deallocate_bars(sc);
+    }
+    if (stage >= BXE_STAGE_IFNET) {
+        if (sc->ifp != NULL) {
+            if_free(sc->ifp);
+            sc->ifp = NULL;
+        }
+    }
+    if (stage >= BXE_STAGE_BUSMASTER) {
+        pci_disable_busmaster(dev);
+    }
+}
+
 /*
  * Device attach function.
  *
@@ -16196,6 +16416,7 @@ static int
 bxe_attach(device_t dev)
 {
     struct bxe_softc *sc;
+    enum bxe_attach_stage stage = BXE_STAGE_NONE;
 
     sc = device_get_softc(dev);
 
@@ -16214,14 +16435,17 @@ bxe_attach(device_t dev)
 
     /* enable bus master capability */
     pci_enable_busmaster(dev);
+    stage = BXE_STAGE_BUSMASTER;
 
     /* get the BARs */
     if (bxe_allocate_bars(sc) != 0) {
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
+    stage = BXE_STAGE_BARS;
 
     /* initialize the mutexes */
     bxe_init_mutexes(sc);
+    stage = BXE_STAGE_MUTEXES;
 
     /* prepare the periodic callout */
     callout_init(&sc->periodic_callout, 1);
@@ -16234,19 +16458,21 @@ bxe_attach(device_t dev)
     sc->chip_tq = taskqueue_create(sc->chip_tq_name, M_NOWAIT,
                                    taskqueue_thread_enqueue,
                                    &sc->chip_tq);
+    if (sc->chip_tq == NULL) {
+        BLOGE(sc, "failed to create chip taskqueue\n");
+        goto bxe_attach_fail;
+    }
     taskqueue_start_threads(&sc->chip_tq, 1, PWAIT, /* lower priority */
                             "%s", sc->chip_tq_name);
 
     TIMEOUT_TASK_INIT(taskqueue_thread,
         &sc->sp_err_timeout_task, 0, bxe_sp_err_timeout_task,  sc);
-
+    stage = BXE_STAGE_CHIP_TQ;
 
     /* get device info and set params */
     if (bxe_get_device_info(sc) != 0) {
         BLOGE(sc, "getting device info\n");
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     /* get final misc params */
@@ -16267,76 +16493,37 @@ bxe_attach(device_t dev)
 
     /* initialize the FreeBSD ifnet interface */
     bxe_init_ifnet(sc);
+    stage = BXE_STAGE_IFNET;
 
+    stage = BXE_STAGE_CDEV;
     if (bxe_add_cdev(sc) != 0) {
-        if (sc->ifp != NULL) {
-            ether_ifdetach(sc->ifp);
-        }
-        ifmedia_removeall(&sc->ifmedia);
-        bxe_release_mutexes(sc);
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     /* allocate device interrupts */
+    stage = BXE_STAGE_INTR;
     if (bxe_interrupt_alloc(sc) != 0) {
-        bxe_del_cdev(sc);
-        if (sc->ifp != NULL) {
-            ether_ifdetach(sc->ifp);
-        }
-        ifmedia_removeall(&sc->ifmedia);
-        bxe_release_mutexes(sc);
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     bxe_init_fp_mutexs(sc);
+    stage = BXE_STAGE_FP_MUTEXES;
 
+    stage = BXE_STAGE_BUF_RINGS;
     if (bxe_alloc_buf_rings(sc) != 0) {
-	bxe_free_buf_rings(sc);
-        bxe_interrupt_free(sc);
-        bxe_del_cdev(sc);
-        if (sc->ifp != NULL) {
-            ether_ifdetach(sc->ifp);
-        }
-        ifmedia_removeall(&sc->ifmedia);
-        bxe_release_mutexes(sc);
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     /* allocate ilt */
+    stage = BXE_STAGE_ILT;
     if (bxe_alloc_ilt_mem(sc) != 0) {
-	bxe_free_buf_rings(sc);
-        bxe_interrupt_free(sc);
-        bxe_del_cdev(sc);
-        if (sc->ifp != NULL) {
-            ether_ifdetach(sc->ifp);
-        }
-        ifmedia_removeall(&sc->ifmedia);
-        bxe_release_mutexes(sc);
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     /* allocate the host hardware/software hsi structures */
+    stage = BXE_STAGE_HSI;
     if (bxe_alloc_hsi_mem(sc) != 0) {
-        bxe_free_ilt_mem(sc);
-	bxe_free_buf_rings(sc);
-        bxe_interrupt_free(sc);
-        bxe_del_cdev(sc);
-        if (sc->ifp != NULL) {
-            ether_ifdetach(sc->ifp);
-        }
-        ifmedia_removeall(&sc->ifmedia);
-        bxe_release_mutexes(sc);
-        bxe_deallocate_bars(sc);
-        pci_disable_busmaster(dev);
-        return (ENXIO);
+        goto bxe_attach_fail;
     }
 
     /* need to reset chip if UNDI was active */
@@ -16374,6 +16561,12 @@ bxe_attach(device_t dev)
     bxe_add_sysctls(sc);
 
     return (0);
+
+bxe_attach_fail:
+
+    bxe_teardown(sc, stage);
+
+    return (ENXIO);
 }
 
 /*
@@ -16400,62 +16593,7 @@ bxe_detach(device_t dev)
         return(EBUSY);
     }
 
-    bxe_del_cdev(sc);
-
-    /* stop the periodic callout */
-    bxe_periodic_stop(sc);
-
-    /* stop the chip taskqueue */
-    atomic_store_rel_long(&sc->chip_tq_flags, CHIP_TQ_NONE);
-    if (sc->chip_tq) {
-        taskqueue_drain(sc->chip_tq, &sc->chip_tq_task);
-        taskqueue_free(sc->chip_tq);
-        sc->chip_tq = NULL;
-        taskqueue_drain_timeout(taskqueue_thread,
-            &sc->sp_err_timeout_task);
-    }
-
-    /* stop and reset the controller if it was open */
-    if (sc->state != BXE_STATE_CLOSED) {
-        BXE_CORE_LOCK(sc);
-        bxe_nic_unload(sc, UNLOAD_CLOSE, TRUE);
-        sc->state = BXE_STATE_DISABLED;
-        BXE_CORE_UNLOCK(sc);
-    }
-
-    /* release the network interface */
-    if (ifp != NULL) {
-        ether_ifdetach(ifp);
-    }
-    ifmedia_removeall(&sc->ifmedia);
-
-    /* XXX do the following based on driver state... */
-
-    /* free the host hardware/software hsi structures */
-    bxe_free_hsi_mem(sc);
-
-    /* free ilt */
-    bxe_free_ilt_mem(sc);
-
-    bxe_free_buf_rings(sc);
-
-    /* release the interrupts */
-    bxe_interrupt_free(sc);
-
-    /* Release the mutexes*/
-    bxe_destroy_fp_mutexs(sc);
-    bxe_release_mutexes(sc);
-
-
-    /* Release the PCIe BAR mapped memory */
-    bxe_deallocate_bars(sc);
-
-    /* Release the FreeBSD interface. */
-    if (sc->ifp != NULL) {
-        if_free(sc->ifp);
-    }
-
-    pci_disable_busmaster(dev);
+    bxe_teardown(sc, BXE_STAGE_HSI);
 
     return (0);
 }
@@ -19116,6 +19254,14 @@ bxe_del_cdev(struct bxe_softc *sc)
         free(sc->eeprom, M_DEVBUF);
         sc->eeprom = NULL;
     }
+
+    if (sc->grc_dump != NULL) {
+        free(sc->grc_dump, M_DEVBUF);
+        sc->grc_dump = NULL;
+    }
+    sc->grcdump_started = 0;
+    sc->grcdump_done = 0;
+
     sc->ioctl_dev = NULL;
 
     return;
