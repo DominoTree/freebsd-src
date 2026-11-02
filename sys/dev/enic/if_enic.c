@@ -912,7 +912,7 @@ enic_err_intr(void *vsc)
 
 	softc = vsc;
 
-	iflib_request_reset_if_up(softc->ctx);
+	iflib_request_reset_if_running(softc->ctx);
 	iflib_admin_intr_deferred(softc->ctx);
 
 	return (FILTER_HANDLED);
