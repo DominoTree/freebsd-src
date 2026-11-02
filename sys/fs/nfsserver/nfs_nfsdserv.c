@@ -1205,6 +1205,8 @@ nfsrvd_write(struct nfsrv_descript *nd, __unused int isdgram,
 
 	if (retlen > nfs_srvmaxio || retlen < 0)
 		nd->nd_repstat = EIO;
+	else if (off < 0)
+		nd->nd_repstat = NFSERR_FBIG;
 	if (vp->v_type != VREG && !nd->nd_repstat) {
 		if (nd->nd_flag & ND_NFSV3)
 			nd->nd_repstat = EINVAL;
