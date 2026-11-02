@@ -907,7 +907,6 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 		goto out;
 	}
 	/* Allocate space for and load the symbol table */
-	ef->ddbsymcnt = shdr[symtabindex].sh_size / sizeof(Elf_Sym);
 	ef->ddbsymtab = malloc(shdr[symtabindex].sh_size, M_LINKER, M_WAITOK);
 	error = vn_rdwr(UIO_READ, nd->ni_vp, (void *)ef->ddbsymtab,
 	    shdr[symtabindex].sh_size, shdr[symtabindex].sh_offset,
@@ -921,7 +920,6 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 	}
 
 	/* Allocate space for and load the symbol strings */
-	ef->ddbstrcnt = shdr[symstrindex].sh_size;
 	ef->ddbstrtab = malloc(shdr[symstrindex].sh_size, M_LINKER, M_WAITOK);
 	error = vn_rdwr(UIO_READ, nd->ni_vp, ef->ddbstrtab,
 	    shdr[symstrindex].sh_size, shdr[symstrindex].sh_offset,
@@ -933,6 +931,12 @@ link_elf_load_file(linker_class_t cls, const char *filename,
 		error = EINVAL;
 		goto out;
 	}
+
+	/* Unlocked ddb lookups may already see this file. */
+	ef->ddbstrcnt = shdr[symstrindex].sh_size;
+	atomic_thread_fence_rel();
+	atomic_store_long(&ef->ddbsymcnt,
+	    shdr[symtabindex].sh_size / sizeof(Elf_Sym));
 
 	/* Do we have a string table for the section names?  */
 	shstrindex = -1;
@@ -1490,9 +1494,12 @@ link_elf_lookup_symbol1(linker_file_t lf, const char *name, c_linker_sym_t *sym,
 	elf_file_t ef = (elf_file_t)lf;
 	const Elf_Sym *symp;
 	const char *strp;
+	long symcnt;
 	int i;
 
-	for (i = 0, symp = ef->ddbsymtab; i < ef->ddbsymcnt; i++, symp++) {
+	symcnt = atomic_load_long(&ef->ddbsymcnt);
+	atomic_thread_fence_acq();
+	for (i = 0, symp = ef->ddbsymtab; i < symcnt; i++, symp++) {
 		strp = ef->ddbstrtab + symp->st_name;
 		if (symp->st_shndx != SHN_UNDEF && strcmp(name, strp) == 0) {
 			if (see_local ||
@@ -1605,9 +1612,12 @@ link_elf_search_symbol(linker_file_t lf, caddr_t value,
 	u_long st_value;
 	const Elf_Sym *es;
 	const Elf_Sym *best = NULL;
+	long symcnt;
 	int i;
 
-	for (i = 0, es = ef->ddbsymtab; i < ef->ddbsymcnt; i++, es++) {
+	symcnt = atomic_load_long(&ef->ddbsymcnt);
+	atomic_thread_fence_acq();
+	for (i = 0, es = ef->ddbsymtab; i < symcnt; i++, es++) {
 		if (es->st_name == 0)
 			continue;
 		st_value = es->st_value;
