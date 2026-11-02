@@ -10294,7 +10294,7 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	 * ensures that any access to the data union will not access invalid
 	 * memory.
 	 */
-	malloc_len = max(ifd_len, sizeof(*data) + sizeof(*cmd));
+	malloc_len = MAX(ifd_len, sizeof(*data) + sizeof(*cmd));
 
 	nvm_buffer = (u8 *)malloc(malloc_len, M_ICE, M_ZERO | M_WAITOK);
 	if (!nvm_buffer)
@@ -10315,6 +10315,13 @@ ice_handle_nvm_access_ioctl(struct ice_softc *sc, struct ifdrv *ifd)
 	 */
 	cmd = (struct ice_nvm_access_cmd *)nvm_buffer;
 	data = (union ice_nvm_access_data *)(nvm_buffer + sizeof(struct ice_nvm_access_cmd));
+
+	if (cmd->data_size > malloc_len - sizeof(*cmd)) {
+		device_printf(dev, "%s: data size %u exceeds the buffer\n",
+			      __func__, cmd->data_size);
+		err = EINVAL;
+		goto cleanup_free_nvm_buffer;
+	}
 
 	/* Handle the NVM access request */
 	status = ice_handle_nvm_access(hw, cmd, data);
