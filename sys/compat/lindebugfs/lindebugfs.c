@@ -132,13 +132,17 @@ debugfs_fill(PFS_FILL_ARGS)
 
 	d = pn->pn_data;
 	vn.v_data = d->dm_data;
+	lf.f_vnode = &vn;
 
-	rc = d->dm_fops->open(&vn, &lf);
-	if (rc < 0) {
+	if (d->dm_fops->open != NULL) {
+		rc = d->dm_fops->open(&vn, &lf);
+		if (rc < 0) {
 #ifdef INVARIANTS
-		printf("%s:%d open failed with %zd\n", __func__, __LINE__, rc);
+			printf("%s:%d open failed with %zd\n", __func__,
+			    __LINE__, rc);
 #endif
-		return (-rc);
+			return (-rc);
+		}
 	}
 
 	off = uio->uio_offset;
